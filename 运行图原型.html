@@ -1,0 +1,1666 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>列车运行图 · 郑州 → 常州</title>
+<style>
+  :root{
+    --bg:#fff; --bg2:#f7f6f3; --bg3:#f1efe8;
+    --tx:#2c2c2a; --tx2:#5f5e5a; --tx3:#888780;
+    --bd:#d3d1c7; --bd2:#e5e3da; --acc:#185FA5; --acc-d:#0F4C86;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;padding:22px 26px 56px;background:var(--bg2);color:var(--tx);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+    "Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:13px;line-height:1.6;}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);}
+  h2{font-size:14px;font-weight:600;margin:0 0 10px;}
+
+  /* 下部两列：左 = 控件（刷新 / 搜索 / 车型 / 席别…），右 = 车次表格。
+     表格列封顶 850px，余下的宽度都给左侧面板 */
+  .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,850px);gap:12px;
+    align-items:start;}
+  .cols>.panel{margin-bottom:0;}
+  /* 刷新栏移到左侧面板最上方：原来在底部，所以边框从「上」翻到「下」 */
+  .side>.refreshbar{margin-top:0;padding-top:0;border-top:none;
+    margin-bottom:11px;padding-bottom:11px;border-bottom:1px solid var(--bd2);}
+  .side .row{gap:11px;}
+  .side .grp{flex-basis:100%;}
+  /* 车型行：正常模式一行；中转模式两行（第1程 / 第2程）。
+     侧栏窄，中转两行用紧凑按钮与更小的间距，保证一行放得下 */
+  .trow{display:flex;gap:5px;align-items:center;flex-wrap:wrap;
+    flex-basis:100%;margin-bottom:6px;}
+  .trow:last-child{margin-bottom:0;}
+  .trow .lbl{min-width:0;white-space:nowrap;}
+  .trow button.f{padding:5px 9px;}
+  .trow .tcnt{font-size:11px;color:var(--tx3);white-space:nowrap;
+    font-variant-numeric:tabular-nums;}
+  .cols .tw{max-height:620px;}
+  @media (max-width:1260px){ .cols{grid-template-columns:1fr;} }
+
+  /* 顶部：乘车日期 */
+  .datebar{display:flex;align-items:center;gap:10px;background:var(--bg);
+    border:1px solid var(--bd2);border-radius:12px;padding:10px 15px;
+    margin-bottom:12px;flex-wrap:wrap;}
+  .datebar .lbl{font-size:12.5px;color:var(--tx2);font-weight:600;}
+  input.dt{font:inherit;font-size:13px;padding:5px 10px;border-radius:7px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--tx);
+    transition:.12s;}
+  input.dt:focus{outline:none;border-color:var(--acc);
+    box-shadow:0 0 0 3px rgba(24,95,165,.16);}
+
+  .panel{background:var(--bg);border:1px solid var(--bd2);border-radius:12px;
+    padding:13px 15px;margin-bottom:12px;}
+
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;}
+  .tab{font:inherit;font-size:12.5px;padding:5px 13px;border-radius:8px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--tx2);
+    cursor:pointer;transition:.12s;display:flex;align-items:center;gap:6px;}
+  .tab:hover{border-color:var(--tx3);color:var(--tx);}
+  .tab.on{background:var(--acc);color:#fff;border-color:var(--acc-d);
+    font-weight:600;box-shadow:0 0 0 3px rgba(24,95,165,.16);}
+  .tab .cnt{font-size:11px;background:var(--bg3);color:var(--tx2);
+    border-radius:9px;padding:0 6px;}
+  .tab.on .cnt{background:rgba(255,255,255,.26);color:#fff;font-weight:600;}
+
+  .row{display:flex;gap:20px;flex-wrap:wrap;align-items:center;}
+  .grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+  .grp.wide{flex-basis:100%;}
+  .lbl{font-size:12px;color:var(--tx3);margin-right:1px;}
+  button.f{font:inherit;font-size:12px;padding:5px 12px;border-radius:7px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--tx2);
+    cursor:pointer;transition:.12s;}
+  button.f:hover{border-color:var(--tx3);color:var(--tx);}
+  button.f.on{background:var(--acc);color:#fff;border-color:var(--acc-d);
+    font-weight:600;box-shadow:0 0 0 3px rgba(24,95,165,.16);}
+  label.chk{display:flex;align-items:center;gap:6px;font-size:12.5px;
+    color:var(--tx2);cursor:pointer;user-select:none;}
+  input[type=checkbox]{accent-color:var(--acc);width:14px;height:14px;}
+  input.q{font:inherit;font-size:12.5px;padding:5px 10px;border-radius:7px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--tx);width:170px;
+    transition:.12s;}
+  input.q::placeholder{color:var(--tx3);}
+  input.q:focus{outline:none;border-color:var(--acc);
+    box-shadow:0 0 0 3px rgba(24,95,165,.16);}
+  .qhint{font-size:11.5px;color:var(--tx3);}
+  .qhint b{color:var(--acc);font-weight:600;}
+  .qhint button{font:inherit;font-size:11.5px;padding:2px 8px;border-radius:6px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--acc);
+    cursor:pointer;margin-left:5px;transition:.12s;}
+  .qhint button:hover{background:var(--bg3);border-color:var(--acc);}
+
+  .leg{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--tx2);
+    margin-top:11px;padding-top:11px;border-top:1px solid var(--bd2);}
+  .sw{display:inline-flex;align-items:center;gap:5px;}
+  .dot{display:inline-block;width:11px;height:11px;border-radius:3px;}
+
+  .routeline{background:var(--bg);border:1px solid var(--bd2);border-radius:12px;
+    padding:10px 15px;margin-bottom:12px;font-size:12.5px;color:var(--tx2);
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  /* 通道选项卡与「车站」并排，中间一条细分隔线 */
+  #rtStations{border-left:1px solid var(--bd2);padding-left:13px;}
+  /* 路由条右侧：中转的数据时间与退出按钮（靠右对齐） */
+  #rtRight{margin-left:auto;display:flex;align-items:center;gap:10px;}
+  #rtRight .muted{color:var(--tx3);}
+  #rtRight b{color:var(--tx);font-weight:600;}
+  #rtRight button{font:inherit;font-size:12px;padding:3px 12px;border-radius:7px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--tx2);
+    cursor:pointer;transition:.12s;white-space:nowrap;}
+  #rtRight button:hover{background:var(--bg3);color:var(--tx);}
+  #rtDesc{flex-basis:100%;margin-top:3px;color:var(--tx2);}
+
+  /* 时间轴缩放条：拖动中间平移、拖两端把手缩放 */
+  .zbar{display:flex;align-items:center;gap:12px;background:var(--bg);
+    border:1px solid var(--bd2);border-radius:12px;padding:7px 14px;
+    margin-bottom:12px;}
+  .zbar .zlabel{font-size:11.5px;color:var(--tx2);white-space:nowrap;
+    min-width:250px;font-variant-numeric:tabular-nums;}
+  .zbar .zlabel b{color:var(--tx);font-weight:600;}
+  .ztrack{position:relative;flex:1;height:20px;background:var(--bg3);
+    border-radius:6px;user-select:none;touch-action:none;
+    border:1px solid var(--bd2);box-sizing:border-box;}
+  .ztrack .zfill{position:absolute;top:0;bottom:0;background:rgba(24,95,165,.10);
+    border-radius:6px;}
+  .zsel{position:absolute;top:-1px;bottom:-1px;background:rgba(24,95,165,.30);
+    border-top:1px solid var(--acc);border-bottom:1px solid var(--acc);
+    box-sizing:border-box;cursor:grab;min-width:4px;}
+  .zsel:active{cursor:grabbing;}
+  .zgrip{position:absolute;top:-2px;bottom:-2px;width:8px;background:var(--acc);
+    border-radius:3px;cursor:ew-resize;}
+  .zgrip.l{left:-4px;}
+  .zgrip.r{right:-4px;}
+  .zbar button{font:inherit;font-size:12px;padding:3px 12px;border-radius:7px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--tx2);
+    cursor:pointer;transition:.12s;white-space:nowrap;}
+  .zbar button:hover{background:var(--bg3);color:var(--tx);}
+
+  /* 中转模式提示条 */
+  /* 路由条第二行的排版（原 tbar 已并入路由条，不再有独立提示条） */
+  #rtDesc b{color:var(--tx);font-weight:600;}
+  #rtDesc .muted{color:var(--tx3);}
+  /* 加载中的小转圈 */
+  .ld{width:12px;height:12px;border:2px solid #cfd8e3;border-top-color:var(--acc);
+    border-radius:50%;animation:sp .8s linear infinite;display:inline-block;
+    vertical-align:-1px;margin-right:5px;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+  /* 表格：首列勾选 + 选中行高亮 */
+  #tbody tr{cursor:pointer;}
+  #tbody tr:hover{background:#faf9f5;}
+  #tbody tr.sel{background:#faeeda;}
+  #tbody tr.sel:hover{background:#f8e8cf;}
+  /* 中转分程小标题行：不可点、不参与勾选与行高亮 */
+  #tbody tr.tgrp{cursor:default;background:var(--bg3);}
+  #tbody tr.tgrp:hover{background:var(--bg3);}
+  #tbody tr.tgrp td{padding:5px 12px;font-size:12px;font-weight:600;
+    color:var(--acc);border-top:1px solid var(--bd2);}
+  #tbody tr.tgrp:first-child td{border-top:none;}
+  #tbody tr.tgrp .muted{color:var(--tx3);font-weight:400;}
+  #tbody td.pickcell{padding-left:12px;}
+  /* 起终站列：原样显示实测站点（郑州东 / 常州北 …），是区分同名车次的依据 */
+  #tbody .ends{font-size:12px;color:var(--tx2);white-space:nowrap;}
+  #tbody .ends .arw{color:var(--tx3);margin:0 5px;}
+  /* 表头「起价」= 可点击的排序按钮（12306 那种） */
+  button.thsort{font:inherit;font-size:13px;font-weight:600;color:var(--tx2);
+    background:none;border:0;padding:0;cursor:pointer;
+    display:inline-flex;align-items:center;gap:3px;}
+  button.thsort:hover{color:var(--acc);}
+  button.thsort.on{color:var(--acc);}
+  input.pick{width:15px;height:15px;cursor:pointer;vertical-align:middle;}
+
+  .chartbox{background:var(--bg);border:1px solid var(--bd2);border-radius:12px;
+    padding:8px 4px 2px;margin-bottom:12px;}
+  svg#chart{display:block;width:100%;height:auto;}
+
+  .refreshbar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;
+    margin-top:11px;padding-top:11px;border-top:1px solid var(--bd2);}
+  button.rf{font:inherit;font-size:12.5px;font-weight:600;padding:6px 16px;
+    border-radius:8px;border:1px solid var(--acc-d);background:var(--acc);
+    color:#fff;cursor:pointer;transition:.12s;display:flex;align-items:center;gap:7px;}
+  button.rf:hover:not(:disabled){background:var(--acc-d);}
+  button.rf:disabled{opacity:.55;cursor:not-allowed;}
+  .spin{width:12px;height:12px;border:2px solid rgba(255,255,255,.35);
+    border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;
+    display:none;}
+  button.rf.busy .spin{display:block;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+  .rfmsg{font-size:12px;color:var(--tx3);}
+  .rfmsg.ok{color:#0F6E56;}
+  .rfmsg.warn{color:#BA7517;}
+  .rfmsg.err{color:#A32D2D;}
+  .logbox{margin-top:9px;font-size:11.5px;line-height:1.7;color:var(--tx3);
+    background:var(--bg3);border-radius:8px;padding:8px 11px;max-height:132px;
+    overflow:auto;white-space:pre-wrap;
+    font-family:ui-monospace,Consolas,"Courier New",monospace;display:none;}
+  /* 刷新日志默认折叠，由「日志」按钮切换 */
+  .logbox.open{display:block;}
+  .logbox.open:empty{display:none;}
+  button.logtog{font:inherit;font-size:11.5px;padding:3px 10px;border-radius:7px;
+    border:1px solid var(--bd);background:var(--bg);color:var(--tx2);
+    cursor:pointer;transition:.12s;white-space:nowrap;}
+  button.logtog:hover{border-color:var(--tx3);color:var(--tx);}
+  .snap{font-size:11.5px;color:var(--tx3);background:var(--bg3);
+    padding:3px 9px;border-radius:6px;white-space:nowrap;}
+  .refreshbar .rfmsg{flex-basis:100%;}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--bd2);}
+  th{font-weight:600;color:var(--tx2);font-size:11.5px;background:var(--bg3);
+    position:sticky;top:0;z-index:1;}
+  tbody tr:hover{background:#faf9f6;}
+  .mono{font-family:ui-monospace,Consolas,"Courier New",monospace;font-size:12px;}
+  .badge{display:inline-block;padding:1px 6px;border-radius:5px;font-size:11px;
+    color:#fff;margin:0 4px 0 0;white-space:nowrap;}
+  .badge.q{background:#e9e7de;color:var(--tx3);}
+  .tw{background:var(--bg);border:1px solid var(--bd2);border-radius:12px;
+    padding:4px;max-height:460px;overflow:auto;}
+  .price{font-weight:600;color:var(--acc);}
+
+  #tip{position:fixed;pointer-events:none;background:#2c2c2a;color:#fff;
+    border-radius:8px;padding:9px 12px;font-size:12px;line-height:1.55;
+    opacity:0;transition:opacity .1s;z-index:99;max-width:290px;
+    box-shadow:0 4px 14px rgba(0,0,0,.2);}
+  #tip .h{font-weight:600;font-size:13px;margin-bottom:3px;}
+  #tip .r{color:#c9c7be;}
+  #tip .tt{display:inline-block;width:8px;height:8px;border-radius:2px;
+    margin-right:5px;vertical-align:middle;}
+  .note{font-size:12px;color:var(--tx3);line-height:1.75;margin-top:12px;
+    padding:12px 14px;background:var(--bg3);border-radius:10px;}
+  .note b{color:var(--tx2);}
+  .note code{background:#e5e3da;padding:1px 5px;border-radius:4px;font-size:11.5px;}
+</style>
+</head>
+<body>
+
+<h2 class="sr-only">郑州到常州列车运行图，按三条不同经由通道分别展示车次时刻与席位余票</h2>
+
+<div class="datebar">
+  <span class="lbl">乘车日期</span>
+  <input type="date" id="datebox" class="dt">
+  <span class="qhint" id="datehint"></span>
+</div>
+
+<div class="panel">
+  <div class="leg" style="margin-top:0;padding-top:0;border-top:none;">
+    <div class="grp"><span class="lbl">线型 = 车型</span>
+      <span class="sw"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#5f5e5a" stroke-width="2.7"/></svg>高铁 G</span>
+      <span class="sw"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#5f5e5a" stroke-width="2.3" stroke-dasharray="10,5"/></svg>动车 D / 城际 C</span>
+      <span class="sw"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#5f5e5a" stroke-width="2" stroke-dasharray="2,4"/></svg>普速 Z / T / K / 数字</span>
+    </div>
+    <div class="grp"><span class="lbl">颜色 = 最低可购席别</span><span id="legSeats"></span></div>
+  </div>
+</div>
+
+<div class="routeline" id="routeline">
+  <span class="tabs" id="tabs"></span>
+  <span class="grp" id="rtStations">
+    <span class="lbl">车站</span>
+    <button class="f" data-d="all">全部站</button>
+    <button class="f on" data-d="main">主要站</button>
+    <button class="f" data-d="hub">枢纽站</button>
+  </span>
+  <span id="rtRight"></span>
+  <span id="rtDesc"></span>
+</div>
+<div class="chartbox"><svg id="chart" viewBox="0 0 1280 700" preserveAspectRatio="xMidYMid meet"></svg></div>
+<div class="zbar" id="zbar">
+  <span class="zlabel" id="zLabel"></span>
+  <div class="ztrack" id="zTrack">
+    <div class="zsel" id="zSel">
+      <span class="zgrip l" data-g="l"></span>
+      <span class="zgrip r" data-g="r"></span>
+    </div>
+  </div>
+  <button id="zReset" title="恢复为按数据自适应（双击缩放条也可重置）">重置</button>
+</div>
+
+<div class="cols">
+  <div class="panel side">
+    <div class="refreshbar">
+      <button class="rf" id="btnRefresh"><span class="spin"></span>刷新数据</button>
+      <span class="snap" id="snap"></span>
+      <button class="logtog" id="logtog" title="展开 / 收起刷新日志">日志 ▾</button>
+      <span class="rfmsg" id="rfmsg"></span>
+    </div>
+    <div class="logbox" id="logbox"></div>
+
+    <div class="row">
+      <div class="grp">
+        <span class="lbl">搜索车次</span>
+        <input id="qbox" class="q" type="search" autocomplete="off"
+               placeholder="如 G1988 / 1988 / K5">
+        <span class="qhint" id="qhint"></span>
+      </div>
+      <div class="grp" id="typegrp"></div>
+      <div class="grp" id="seatgrp"></div>
+      <div class="grp">
+        <label class="chk"><input type="checkbox" id="onlyTicket"> 仅看有票</label>
+        <label class="chk"><input type="checkbox" id="hiTicket"> 高亮有票</label>
+        <label class="chk"><input type="checkbox" id="showLbl"> 全部车次标签</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 id="tblTitle">车次明细</h2>
+    <div class="tw"><table>
+      <thead><tr>
+        <th style="width:36px"><input type="checkbox" class="pick" id="pickAll"
+            title="全选 / 全不选（当前列表）"></th>
+        <th style="width:82px">车次</th>
+        <th style="width:150px">起终站</th>
+        <th style="width:76px"><button class="thsort" id="sortPrice">起价</button></th>
+        <th title="淡显的席别未勾选，不参与「有票」判定与上色">席别（余票 / 票价）</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<div class="note" id="note"></div>
+<div id="tip"></div>
+
+<script>
+const DATA = {"meta":{"travel_date":"2026-10-01","price_captured":"2026-09-19 20:26","live_captured":"2026-09-19 20:26:03","route":"郑州 → 常州","from_code":"ZZF","to_code":"CZH"},"axes":{"京沪通道":["郑州","开封","兰考","民权","宁陵县","商丘","夏邑县","虞城县","砀山","永城","黄口","萧县","徐州","宿州","蚌埠","定远","明光","滁州","南京","镇江","丹阳","常州"],"合杭通道":["郑州","开封","许昌北","扶沟南","兰考","周口东","民权","商丘","临泉","亳州","芦庙","太和","阜阳","颍上","水家湖","寿县","淮南","合肥","安庆","芜湖","南京","镇江","丹阳","常州"],"连镇通道":["郑州","开封","兰考","商丘","砀山","永城","萧县","徐州","睢宁","宿迁","泗阳","淮安","高邮","宝应","扬州","镇江","丹阳","常州"]},"freq":{"京沪通道":{"郑州":32,"开封":16,"商丘":27,"徐州":31,"蚌埠":19,"滁州":7,"南京":32,"镇江":10,"丹阳":2,"常州":32,"明光":1,"民权":8,"砀山":5,"宿州":6,"兰考":7,"宁陵县":6,"萧县":1,"永城":5,"定远":1,"虞城县":1,"焦作":2,"修武西":2,"武陟":2,"夏邑县":1,"黄口":1},"合杭通道":{"郑州":12,"民权":2,"商丘":8,"阜阳":12,"颍上":4,"寿县":6,"合肥":12,"南京":12,"常州":12,"开封":2,"淮南":6,"镇江":7,"扶沟南":3,"周口东":3,"临泉":1,"水家湖":1,"安庆":1,"芜湖":1,"芦庙":1,"太和":3,"许昌北":2,"丹阳":1,"兰考":2,"亳州":3},"连镇通道":{"郑州":3,"兰考":1,"商丘":3,"砀山":2,"永城":2,"萧县":2,"徐州":3,"宿迁":3,"淮安":3,"高邮":2,"扬州":3,"镇江":1,"丹阳":3,"常州":3,"开封":1,"宝应":1,"睢宁":1,"泗阳":1}},"rowst":{"京沪通道":{"郑州":["郑州","郑州东","郑州航空港"],"开封":["开封","开封北"],"商丘":["商丘"],"徐州":["徐州","徐州东"],"蚌埠":["蚌埠","蚌埠南"],"滁州":["滁州","滁州北"],"南京":["南京","南京南"],"镇江":["镇江南","镇江"],"丹阳":["丹阳","丹阳北"],"常州":["常州","常州北"],"明光":["明光"],"民权":["民权","民权北"],"砀山":["砀山南","砀山"],"宿州":["宿州东","宿州"],"兰考":["兰考"],"宁陵县":["宁陵县"],"萧县":["萧县北"],"永城":["永城北"],"定远":["定远"],"虞城县":["虞城县"],"夏邑县":["夏邑县"],"黄口":["黄口"]},"合杭通道":{"郑州":["郑州东","郑州航空港"],"民权":["民权北"],"商丘":["商丘"],"阜阳":["阜阳西"],"颍上":["颍上北"],"寿县":["寿县"],"合肥":["合肥","合肥西","合肥北城"],"南京":["南京南"],"常州":["常州北","常州","金坛"],"开封":["开封北"],"淮南":["淮南南"],"镇江":["镇江南","镇江"],"扶沟南":["扶沟南"],"周口东":["周口东"],"临泉":["临泉"],"水家湖":["水家湖"],"安庆":["安庆"],"芜湖":["芜湖"],"芦庙":["芦庙"],"太和":["太和东"],"许昌北":["许昌北"],"丹阳":["丹阳"],"兰考":["兰考南"],"亳州":["亳州南"]},"连镇通道":{"郑州":["郑州东"],"兰考":["兰考南"],"商丘":["商丘"],"砀山":["砀山南"],"永城":["永城北"],"萧县":["萧县北"],"徐州":["徐州东"],"宿迁":["宿迁"],"淮安":["淮安东"],"高邮":["高邮"],"扬州":["扬州东"],"镇江":["大港南"],"丹阳":["丹阳"],"常州":["常州"],"开封":["开封北"],"宝应":["宝应"],"睢宁":["睢宁"],"泗阳":["泗阳"]}},"trains":[{"code":"K558","type":"K","route":"京沪通道","dep":"00:18","arr":"11:50","dur":"11:32","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","00:18"],["开封","开封","01:03"],["商丘","商丘","02:31"],["徐州","徐州","04:26"],["蚌埠","蚌埠","06:22"],["滁州北","滁州","07:49"],["南京","南京","08:48"],["镇江","镇江","09:34"],["丹阳","丹阳","10:28"],["常州","常州","11:50"]]},{"code":"K2668","type":"K","route":"京沪通道","dep":"00:47","arr":"12:17","dur":"11:30","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","00:47"],["开封","开封","01:34"],["商丘","商丘","02:57"],["徐州","徐州","04:41"],["蚌埠","蚌埠","06:34"],["明光","明光","07:19"],["滁州北","滁州","08:05"],["南京","南京","10:44"],["常州","常州","12:17"]]},{"code":"D128","type":"D","route":"京沪通道","dep":"01:29","arr":"08:30","dur":"07:01","from":"郑州","to":"常州","seats":{"ze":{"n":"二等座","p":257.0,"a":"无","r":6},"rw":{"n":"软卧","p":553.0,"a":"无","r":4},"yw":{"n":"硬卧","p":450.0,"a":"无","r":3},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","01:29"],["徐州","徐州","04:18"],["南京","南京","07:18"],["常州","常州","08:30"]]},{"code":"D124","type":"D","route":"京沪通道","dep":"03:21","arr":"10:37","dur":"07:16","from":"郑州","to":"常州","seats":{"ze":{"n":"二等座","p":257.0,"a":"无","r":6},"rw":{"n":"软卧","p":553.0,"a":"无","r":4},"yw":{"n":"硬卧","p":450.0,"a":"无","r":3},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","03:21"],["商丘","商丘","04:56"],["徐州","徐州","06:22"],["蚌埠","蚌埠","07:47"],["南京","南京","09:27"],["常州","常州","10:37"]]},{"code":"Z42","type":"Z","route":"京沪通道","dep":"03:27","arr":"10:31","dur":"07:04","from":"郑州","to":"常州","seats":{"gr":{"n":"高级软卧","p":575.0,"a":"无","r":5},"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","03:27"],["徐州","徐州","06:14"],["蚌埠","蚌埠","07:39"],["南京","南京","09:21"],["常州","常州","10:31"]]},{"code":"Z306","type":"Z","route":"京沪通道","dep":"03:39","arr":"10:56","dur":"07:17","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","03:39"],["商丘","商丘","05:14"],["徐州","徐州","06:45"],["南京","南京","09:40"],["镇江","镇江","10:18"],["常州","常州","10:56"]]},{"code":"G4824","type":"G","route":"京沪通道","dep":"04:04","arr":"07:43","dur":"03:39","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"3","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","04:04"],["徐州东","徐州","05:37"],["南京南","南京","07:03"],["镇江南","镇江","07:24"],["常州北","常州","07:43"]]},{"code":"G4836","type":"G","route":"合杭通道","dep":"05:34","arr":"10:11","dur":"04:37","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1554.0,"a":"无","r":9},"zy":{"n":"一等座","p":769.0,"a":"无","r":7},"ze":{"n":"二等座","p":482.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","05:34"],["民权北","民权","06:13"],["商丘","商丘","06:30"],["阜阳西","阜阳","07:23"],["颍上北","颍上","07:44"],["寿县","寿县","08:03"],["合肥","合肥","08:38"],["南京南","南京","09:36"],["常州北","常州","10:11"]]},{"code":"G4884","type":"G","route":"合杭通道","dep":"05:54","arr":"11:04","dur":"05:10","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1554.0,"a":"无","r":9},"zy":{"n":"一等座","p":769.0,"a":"无","r":7},"ze":{"n":"二等座","p":482.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","05:54"],["开封北","开封","06:15"],["商丘","商丘","06:51"],["阜阳西","阜阳","07:38"],["颍上北","颍上","08:01"],["寿县","寿县","08:20"],["淮南南","淮南","08:32"],["合肥","合肥","09:01"],["南京南","南京","10:02"],["镇江南","镇江","10:27"],["常州北","常州","11:04"]]},{"code":"D114","type":"D","route":"京沪通道","dep":"06:38","arr":"14:23","dur":"07:45","from":"郑州","to":"常州","seats":{"ze":{"n":"二等座","p":257.0,"a":"无","r":6},"rw":{"n":"软卧","p":553.0,"a":"无","r":4},"yw":{"n":"硬卧","p":450.0,"a":"无","r":3},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","06:38"],["开封","开封","07:14"],["商丘","商丘","08:27"],["徐州","徐州","09:51"],["蚌埠","蚌埠","11:18"],["南京","南京","13:06"],["镇江","镇江","13:46"],["常州","常州","14:23"]]},{"code":"D218","type":"D","route":"京沪通道","dep":"06:50","arr":"14:11","dur":"07:21","from":"郑州","to":"常州","seats":{"ze":{"n":"二等座","p":257.0,"a":"无","r":6},"rw":{"n":"软卧","p":553.0,"a":"无","r":4},"yw":{"n":"硬卧","p":450.0,"a":"无","r":3},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","06:50"],["开封","开封","07:27"],["商丘","商丘","08:35"],["徐州","徐州","09:57"],["南京","南京","13:00"],["常州","常州","14:11"]]},{"code":"G1801","type":"G","route":"合杭通道","dep":"07:39","arr":"12:07","dur":"04:28","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1412.0,"a":"无","r":9},"zy":{"n":"一等座","p":721.0,"a":"无","r":7},"ze":{"n":"二等座","p":452.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","07:39"],["扶沟南","扶沟南","08:15"],["周口东","周口东","08:35"],["临泉","临泉","09:06"],["阜阳西","阜阳","09:23"],["水家湖","水家湖","10:02"],["合肥","合肥","10:28"],["南京南","南京","11:31"],["常州北","常州","12:07"]]},{"code":"G3278","type":"G","route":"合杭通道","dep":"08:41","arr":"14:29","dur":"05:48","from":"郑州东","to":"金坛","seats":{"swz":{"n":"商务座","p":1936.0,"a":"无","r":9},"zy":{"n":"一等座","p":935.5,"a":"无","r":7},"ze":{"n":"二等座","p":583.5,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","08:41"],["商丘","商丘","09:31"],["阜阳西","阜阳","10:22"],["合肥西","合肥","11:25"],["安庆","安庆","12:28"],["芜湖","芜湖","13:25"],["南京南","南京","13:58"],["金坛","常州","14:29"]]},{"code":"G1812","type":"G","route":"京沪通道","dep":"08:52","arr":"13:01","dur":"04:09","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","08:52"],["开封北","开封","09:12"],["商丘","商丘","09:48"],["徐州东","徐州","10:37"],["蚌埠南","蚌埠","11:20"],["南京南","南京","12:11"],["镇江南","镇江","12:34"],["常州北","常州","13:01"]]},{"code":"G2614","type":"G","route":"连镇通道","dep":"09:24","arr":"14:17","dur":"04:53","from":"郑州东","to":"常州","seats":{"swz":{"n":"商务座","p":1414.0,"a":"7","r":9},"zy":{"n":"一等座","p":668.0,"a":"6","r":7},"ze":{"n":"二等座","p":418.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","09:24"],["兰考南","兰考","09:55"],["商丘","商丘","10:21"],["砀山南","砀山","10:42"],["永城北","永城","10:54"],["萧县北","萧县","11:09"],["徐州东","徐州","11:28"],["宿迁","宿迁","12:03"],["淮安东","淮安","12:33"],["高邮","高邮","13:05"],["扬州东","扬州","13:22"],["大港南","镇江","13:41"],["丹阳","丹阳","14:00"],["常州","常州","14:17"]]},{"code":"G1808","type":"G","route":"京沪通道","dep":"10:01","arr":"13:37","dur":"03:36","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","10:01"],["商丘","商丘","10:50"],["徐州东","徐州","11:37"],["滁州","滁州","12:41"],["南京南","南京","13:01"],["常州北","常州","13:37"]]},{"code":"G1816","type":"G","route":"京沪通道","dep":"10:19","arr":"14:25","dur":"04:06","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"1","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","10:19"],["民权北","民权","10:58"],["商丘","商丘","11:21"],["砀山南","砀山","11:44"],["徐州东","徐州","12:22"],["宿州东","宿州","12:47"],["南京南","南京","13:46"],["镇江南","镇江","14:06"],["常州北","常州","14:25"]]},{"code":"G92","type":"G","route":"京沪通道","dep":"10:46","arr":"14:04","dur":"03:18","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","10:46"],["徐州东","徐州","12:17"],["南京南","南京","13:32"],["常州北","常州","14:04"]]},{"code":"K4190","type":"K","route":"京沪通道","dep":"10:50","arr":"22:50","dur":"12:00","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"2","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","10:50"],["开封","开封","11:38"],["兰考","兰考","12:12"],["民权","民权","12:39"],["宁陵县","宁陵县","12:58"],["商丘","商丘","13:30"],["徐州","徐州","15:45"],["宿州","宿州","17:00"],["蚌埠","蚌埠","18:16"],["南京","南京","21:13"],["常州","常州","22:50"]]},{"code":"G3154","type":"G","route":"合杭通道","dep":"11:05","arr":"15:56","dur":"04:51","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1554.0,"a":"1","r":9},"zy":{"n":"一等座","p":769.0,"a":"无","r":7},"ze":{"n":"二等座","p":482.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","11:05"],["开封北","开封","11:25"],["商丘","商丘","12:02"],["芦庙","芦庙","12:24"],["太和东","太和","12:51"],["阜阳西","阜阳","13:06"],["淮南南","淮南","13:42"],["合肥北城","合肥","14:03"],["合肥","合肥","14:18"],["南京南","南京","15:17"],["常州北","常州","15:56"]]},{"code":"G3251","type":"G","route":"合杭通道","dep":"11:28","arr":"16:25","dur":"04:57","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1412.0,"a":"无","r":9},"zy":{"n":"一等座","p":721.0,"a":"无","r":7},"ze":{"n":"二等座","p":452.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","11:28"],["郑州航空港","郑州","11:44"],["许昌北","许昌北","12:01"],["扶沟南","扶沟南","12:20"],["周口东","周口东","12:39"],["阜阳西","阜阳","13:19"],["寿县","寿县","13:52"],["淮南南","淮南","14:04"],["合肥","合肥","14:40"],["南京南","南京","15:39"],["镇江南","镇江","16:03"],["常州北","常州","16:25"]]},{"code":"G3251","type":"G","route":"合杭通道","dep":"11:46","arr":"16:25","dur":"04:39","from":"郑州航空港","to":"常州北","seats":{"swz":{"n":"商务座","p":1346.0,"a":"无","r":9},"zy":{"n":"一等座","p":686.0,"a":"无","r":7},"ze":{"n":"二等座","p":430.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","11:28"],["郑州航空港","郑州","11:44"],["许昌北","许昌北","12:01"],["扶沟南","扶沟南","12:20"],["周口东","周口东","12:39"],["阜阳西","阜阳","13:19"],["寿县","寿县","13:52"],["淮南南","淮南","14:04"],["合肥","合肥","14:40"],["南京南","南京","15:39"],["镇江南","镇江","16:03"],["常州北","常州","16:25"]]},{"code":"G1955","type":"G","route":"合杭通道","dep":"12:49","arr":"16:47","dur":"03:58","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1412.0,"a":"无","r":9},"zy":{"n":"一等座","p":721.0,"a":"无","r":7},"ze":{"n":"二等座","p":452.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","12:49"],["阜阳西","阜阳","14:08"],["合肥","合肥","15:06"],["南京南","南京","16:07"],["镇江南","镇江","16:28"],["常州北","常州","16:47"]]},{"code":"G1922","type":"G","route":"京沪通道","dep":"12:51","arr":"17:06","dur":"04:15","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","12:51"],["商丘","商丘","13:40"],["萧县北","萧县","14:21"],["徐州东","徐州","14:42"],["宿州东","宿州","15:03"],["滁州","滁州","15:52"],["南京南","南京","16:15"],["镇江南","镇江","16:36"],["丹阳北","丹阳","16:49"],["常州北","常州","17:06"]]},{"code":"G1824","type":"G","route":"京沪通道","dep":"13:23","arr":"17:28","dur":"04:05","from":"郑州航空港","to":"常州北","seats":{"swz":{"n":"商务座","p":1824.0,"a":"无","r":9},"zy":{"n":"一等座","p":839.0,"a":"无","r":7},"ze":{"n":"二等座","p":524.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州航空港","郑州","13:23"],["郑州东","郑州","13:44"],["商丘","商丘","14:40"],["永城北","永城","15:05"],["徐州东","徐州","15:39"],["南京南","南京","16:55"],["常州北","常州","17:28"]]},{"code":"G2618","type":"G","route":"连镇通道","dep":"13:34","arr":"18:12","dur":"04:38","from":"郑州东","to":"常州","seats":{"zy":{"n":"一等座","p":668.0,"a":"2","r":7},"ze":{"n":"二等座","p":418.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","13:34"],["开封北","开封","13:54"],["商丘","商丘","14:35"],["萧县北","萧县","15:08"],["徐州东","徐州","15:28"],["宿迁","宿迁","16:06"],["淮安东","淮安","16:36"],["宝应","宝应","16:54"],["扬州东","扬州","17:24"],["丹阳","丹阳","17:55"],["常州","常州","18:12"]]},{"code":"G1824","type":"G","route":"京沪通道","dep":"13:51","arr":"17:28","dur":"03:37","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州航空港","郑州","13:23"],["郑州东","郑州","13:44"],["商丘","商丘","14:40"],["永城北","永城","15:05"],["徐州东","徐州","15:39"],["南京南","南京","16:55"],["常州北","常州","17:28"]]},{"code":"G3166","type":"G","route":"合杭通道","dep":"14:10","arr":"19:05","dur":"04:55","from":"郑州东","to":"常州","seats":{"swz":{"n":"商务座","p":1535.0,"a":"无","r":9},"zy":{"n":"一等座","p":760.0,"a":"无","r":7},"ze":{"n":"二等座","p":476.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","14:10"],["商丘","商丘","14:59"],["太和东","太和","15:39"],["阜阳西","阜阳","15:54"],["淮南南","淮南","16:29"],["合肥","合肥","16:59"],["南京南","南京","18:05"],["镇江","镇江","18:33"],["丹阳","丹阳","18:48"],["常州","常州","19:05"]]},{"code":"G2196","type":"G","route":"京沪通道","dep":"14:15","arr":"18:26","dur":"04:11","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","14:15"],["商丘","商丘","15:04"],["永城北","永城","15:29"],["徐州东","徐州","15:58"],["宿州东","宿州","16:27"],["定远","定远","17:11"],["南京南","南京","17:44"],["镇江南","镇江","18:06"],["常州北","常州","18:26"]]},{"code":"G1868","type":"G","route":"京沪通道","dep":"14:35","arr":"18:30","dur":"03:55","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","14:35"],["砀山南","砀山","15:37"],["永城北","永城","15:49"],["徐州东","徐州","16:22"],["蚌埠南","蚌埠","17:04"],["南京南","南京","17:48"],["镇江南","镇江","18:10"],["常州北","常州","18:30"]]},{"code":"G1988","type":"G","route":"连镇通道","dep":"15:25","arr":"20:23","dur":"04:58","from":"郑州东","to":"常州","seats":{"swz":{"n":"商务座","p":1414.0,"a":"6","r":9},"zy":{"n":"一等座","p":668.0,"a":"有","r":7},"ze":{"n":"二等座","p":418.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","15:25"],["商丘","商丘","16:14"],["砀山南","砀山","16:36"],["永城北","永城","16:49"],["徐州东","徐州","17:16"],["睢宁","睢宁","17:50"],["宿迁","宿迁","18:04"],["泗阳","泗阳","18:21"],["淮安东","淮安","18:40"],["高邮","高邮","19:13"],["扬州东","扬州","19:30"],["丹阳","丹阳","20:06"],["常州","常州","20:23"]]},{"code":"G3178","type":"G","route":"合杭通道","dep":"15:56","arr":"21:18","dur":"05:22","from":"郑州东","to":"常州","seats":{"swz":{"n":"商务座","p":1535.0,"a":"无","r":9},"zy":{"n":"一等座","p":760.0,"a":"无","r":7},"ze":{"n":"二等座","p":476.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","15:56"],["兰考南","兰考","16:28"],["民权北","民权","16:42"],["商丘","商丘","17:00"],["亳州南","亳州","17:27"],["太和东","太和","17:50"],["阜阳西","阜阳","18:04"],["颍上北","颍上","18:23"],["寿县","寿县","18:42"],["淮南南","淮南","18:54"],["合肥","合肥","19:24"],["南京南","南京","20:24"],["镇江","镇江","20:52"],["常州","常州","21:18"]]},{"code":"G1972","type":"G","route":"京沪通道","dep":"16:22","arr":"20:39","dur":"04:17","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","16:22"],["开封北","开封","16:42"],["商丘","商丘","17:18"],["砀山南","砀山","17:39"],["徐州东","徐州","18:21"],["蚌埠南","蚌埠","19:06"],["滁州","滁州","19:36"],["南京南","南京","20:03"],["常州北","常州","20:39"]]},{"code":"K2188","type":"K","route":"京沪通道","dep":"16:42","arr":"03:05","dur":"10:23","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","16:42"],["开封","开封","17:59"],["兰考","兰考","18:32"],["民权","民权","19:00"],["宁陵县","宁陵县","19:18"],["商丘","商丘","19:50"],["虞城县","虞城县","20:15"],["徐州","徐州","21:37"],["蚌埠","蚌埠","23:34"],["南京","南京","01:37"],["常州","常州","03:05"]]},{"code":"K4060","type":"K","route":"京沪通道","dep":"16:51","arr":"05:21","dur":"12:30","from":"郑州","to":"常州","seats":{"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","16:51"],["民权","民权","18:21"],["宁陵县","宁陵县","18:44"],["商丘","商丘","19:18"],["徐州","徐州","22:50"],["蚌埠","蚌埠","00:55"],["南京","南京","03:05"],["常州","常州","05:21"]]},{"code":"G1976","type":"G","route":"京沪通道","dep":"17:19","arr":"21:38","dur":"04:19","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"无","r":9},"zy":{"n":"一等座","p":804.0,"a":"无","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","17:19"],["开封北","开封","17:39"],["商丘","商丘","18:20"],["永城北","永城","18:50"],["徐州东","徐州","19:19"],["宿州东","宿州","19:56"],["蚌埠南","蚌埠","20:21"],["南京南","南京","21:04"],["常州北","常州","21:38"]]},{"code":"K362","type":"K","route":"京沪通道","dep":"17:28","arr":"03:17","dur":"09:49","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","17:28"],["开封","开封","18:14"],["兰考","兰考","18:46"],["民权","民权","19:12"],["宁陵县","宁陵县","19:31"],["商丘","商丘","20:16"],["徐州","徐州","22:03"],["南京","南京","01:49"],["常州","常州","03:17"]]},{"code":"K292","type":"K","route":"京沪通道","dep":"17:34","arr":"03:23","dur":"09:49","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","17:34"],["开封","开封","18:25"],["兰考","兰考","18:57"],["民权","民权","19:23"],["商丘","商丘","20:07"],["徐州","徐州","21:49"],["蚌埠","蚌埠","23:40"],["南京","南京","01:43"],["常州","常州","03:23"]]},{"code":"G1950","type":"G","route":"京沪通道","dep":"17:52","arr":"21:57","dur":"04:05","from":"郑州","to":"常州北","seats":{"swz":{"n":"商务座","p":1785.0,"a":"5","r":9},"zy":{"n":"一等座","p":816.0,"a":"2","r":7},"ze":{"n":"二等座","p":510.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","17:48"],["郑州东","郑州","18:10"],["开封北","开封","18:35"],["商丘","商丘","19:11"],["徐州东","徐州","19:58"],["蚌埠南","蚌埠","20:33"],["滁州","滁州","21:02"],["南京南","南京","21:23"],["常州北","常州","21:57"]]},{"code":"G466","type":"G","route":"合杭通道","dep":"17:54","arr":"22:13","dur":"04:19","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1554.0,"a":"无","r":9},"zy":{"n":"一等座","p":769.0,"a":"无","r":7},"ze":{"n":"二等座","p":482.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","17:54"],["商丘","商丘","18:43"],["亳州南","亳州","19:10"],["阜阳西","阜阳","19:39"],["合肥","合肥","20:38"],["南京南","南京","21:37"],["常州北","常州","22:13"]]},{"code":"G1942","type":"G","route":"合杭通道","dep":"18:09","arr":"23:00","dur":"04:51","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1554.0,"a":"无","r":9},"zy":{"n":"一等座","p":769.0,"a":"无","r":7},"ze":{"n":"二等座","p":482.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州东","郑州","18:09"],["兰考南","兰考","18:41"],["商丘","商丘","19:06"],["亳州南","亳州","19:32"],["阜阳西","阜阳","20:01"],["颍上北","颍上","20:19"],["寿县","寿县","20:38"],["合肥","合肥","21:12"],["南京南","南京","22:16"],["镇江南","镇江","22:41"],["常州北","常州","23:00"]]},{"code":"K154","type":"K","route":"京沪通道","dep":"18:10","arr":"04:15","dur":"10:05","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","18:10"],["开封","开封","18:55"],["兰考","兰考","19:27"],["民权","民权","19:53"],["宁陵县","宁陵县","20:11"],["商丘","商丘","20:46"],["夏邑县","夏邑县","21:18"],["砀山","砀山","21:40"],["宿州","宿州","23:38"],["蚌埠","蚌埠","00:41"],["南京","南京","02:43"],["常州","常州","04:15"]]},{"code":"G1950","type":"G","route":"京沪通道","dep":"18:15","arr":"21:57","dur":"03:42","from":"郑州东","to":"常州北","seats":{"swz":{"n":"商务座","p":1758.0,"a":"5","r":9},"zy":{"n":"一等座","p":804.0,"a":"2","r":7},"ze":{"n":"二等座","p":502.0,"a":"无","r":6},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","17:48"],["郑州东","郑州","18:10"],["开封北","开封","18:35"],["商丘","商丘","19:11"],["徐州东","徐州","19:58"],["蚌埠南","蚌埠","20:33"],["滁州","滁州","21:02"],["南京南","南京","21:23"],["常州北","常州","21:57"]]},{"code":"K236","type":"K","route":"京沪通道","dep":"18:57","arr":"05:00","dur":"10:03","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","18:57"],["兰考","兰考","20:08"],["商丘","商丘","21:09"],["砀山","砀山","21:55"],["黄口","黄口","22:23"],["徐州","徐州","23:24"],["南京","南京","03:32"],["常州","常州","05:00"]]},{"code":"K1148","type":"K","route":"京沪通道","dep":"19:51","arr":"06:51","dur":"11:00","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","19:51"],["开封","开封","20:36"],["商丘","商丘","22:03"],["徐州","徐州","23:50"],["蚌埠","蚌埠","02:02"],["南京","南京","04:20"],["常州","常州","06:51"]]},{"code":"K1104","type":"K","route":"京沪通道","dep":"20:02","arr":"06:40","dur":"10:38","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","20:02"],["开封","开封","20:48"],["宁陵县","宁陵县","21:52"],["商丘","商丘","22:23"],["徐州","徐州","00:05"],["蚌埠","蚌埠","02:09"],["南京","南京","04:14"],["常州","常州","06:40"]]},{"code":"K736","type":"K","route":"京沪通道","dep":"21:54","arr":"09:21","dur":"11:27","from":"郑州","to":"常州","seats":{"rw":{"n":"软卧","p":315.0,"a":"无","r":4},"yw":{"n":"硬卧","p":208.0,"a":"无","r":3},"yz":{"n":"硬座","p":112.0,"a":"无","r":1},"wz":{"n":"无座","p":null,"a":"无","r":0}},"stops":[["郑州","郑州","21:54"],["兰考","兰考","23:06"],["民权","民权","23:33"],["商丘","商丘","00:17"],["徐州","徐州","02:28"],["蚌埠","蚌埠","04:30"],["南京","南京","07:30"],["镇江","镇江","08:22"],["常州","常州","09:21"]]}]}
+
+const SEAT = {
+  swz:{n:"商务座",c:"#854F0B",r:9}, tz:{n:"特等座",c:"#993C1D",r:8},
+  zy:{n:"一等座",c:"#534AB7",r:7},  ze:{n:"二等座",c:"#185FA5",r:6},
+  gr:{n:"高级软卧",c:"#A32D2D",r:5}, rw:{n:"软卧",c:"#C2417A",r:4},
+  yw:{n:"硬卧",c:"#0F6E56",r:3},    rz:{n:"软座",c:"#639922",r:2},
+  yz:{n:"硬座",c:"#5F5E5A",r:1},    wz:{n:"无座",c:"#888780",r:0}
+};
+/* 普速（Z 直达 / T 特快 / K 普快 / 纯数字车次）**共用一种线型**，
+   只有 G / D·C 各自不同，这样图上只需分辨三类。 */
+const PT_LINE={w:2.0,dash:"2,4"};
+const TYPE = {
+  G:{n:"高铁",w:2.7,dash:"none"},   D:{n:"动车",w:2.3,dash:"10,5"},
+  C:{n:"城际",w:2.3,dash:"10,5"},   Z:{n:"直达",...PT_LINE},
+  T:{n:"特快",...PT_LINE},          K:{n:"普快",...PT_LINE}
+};
+const GREY="#C9C7BE", UNK="#B4B2A9";
+/* 车型筛选用的键：纯数字车次统一归为 "N"，其余用首字母 */
+const TYPE_ORDER=["G","D","C","Z","T","K","N"];
+const TYPE_LABEL={G:"高铁 G",D:"动车 D",C:"城际 C",Z:"直达 Z",
+                  T:"特快 T",K:"普快 K",N:"数字车次"};
+function tkey(t){return /^\d$/.test(String(t.type))?"N":String(t.type);}
+/* 某趟车的线型 / 车型名。纯数字车次没有 TYPE 条目，统一按普速处理 */
+function tinfo(tr){return TYPE[tr.type]||{n:"普速",...PT_LINE};}
+const ROUTES=["京沪通道","合杭通道","连镇通道"];
+const ROUTE_DESC={
+  "京沪通道":"经 商丘 · 徐州 · 蚌埠 · 南京（陇海线 / 京沪线 / 京沪高铁）",
+  "合杭通道":"经 阜阳 · 合肥 · 南京（郑阜高铁 / 商合杭高铁）",
+  "连镇通道":"经 徐州 · 淮安 · 扬州 · 丹阳（郑徐高铁 / 连镇铁路）"
+};
+/* 「主要站」= 人工挑选的中间站白名单；首末站（郑州 / 常州）由代码强制保留 */
+const MAIN_STATIONS={
+  "京沪通道":["开封","商丘","徐州","蚌埠","南京","镇江"],
+  "合杭通道":["商丘","阜阳","淮南","合肥","南京","镇江"],
+  "连镇通道":["商丘","徐州","宿迁","淮安","扬州","丹阳"]
+};
+const CAN_API = location.protocol !== "file:";
+
+let TRAINS=[], curRoute="京沪通道",
+    typeSel=new Set(TYPE_ORDER),  // 车型多选（正常模式）：选中的车型键
+    onlyTick=false, hiTick=false, lblAll=false, sortBy="dep",
+    density="main", lineEls=[];
+let selected=new Set();       // 已勾选的车次键 "code|dep"（多选，由表格勾选框驱动）
+let query="";                 // 搜索词（大写、去空格）
+let VIA=null;                 // 已选中的中转站名：点站名设置、再点取消
+let TRANSFER=null;            // 中转查询结果：{via,row,data,loading,cached,items,tf}
+                              //   tf = 各程车型筛选 {1:Set,2:Set}，随 TRANSFER 一起作废
+                              //   只有点「刷新数据」才会产生；null = 图上是主数据集
+/* 滚轮缩放：{t0,t1} 为当前可视时间范围（小时），null = 按数据自适应 */
+let ZVIEW=null;
+let XV=null;                  // 最近一次绘制的坐标映射（调试用）
+let CUR_AXIS=[];              // 当前通道按密度过滤后的车站轴
+let CUR_AXIS_FULL=[];         // 当前通道的完整车站轴（未按密度压缩）
+
+function hhmm(s){const p=String(s).split(":");return +p[0]+ +p[1]/60;}
+/* 小时数 → "HH:MM"；跨日用上标标记（⁻¹ = 前一日，⁺¹ = 次日） */
+function fmtT(h){
+  const d=Math.floor(h+1e-9), m=Math.round((h-d)*60);
+  let dd=d%24; if(dd<0) dd+=24;
+  const tag=d>=24?"⁺¹":(d<0?"⁻¹":"");
+  return String(dd).padStart(2,"0")+":"+String(m).padStart(2,"0")+tag;
+}
+function isTick(a){return a==="有"||/^\d+$/.test(a||"");}
+function parseT(s){const m=/^(\d{1,2}):(\d{2})$/.exec(String(s==null?"":s).trim());
+  return m?(+m[1]+ +m[2]/60):null;}
+/* 席别筛选：只有被选中的席别才参与「是否有票 / 最低可购席别 / 起价」的判定。
+   「默认」按钮 = 二等座 + 硬卧 + 硬座 */
+const SEAT_DEFAULT=["ze","yw","yz"];
+let seatSel=new Set(SEAT_DEFAULT);
+const SEAT_ORDER=["swz","tz","zy","ze","gr","rw","yw","rz","yz","wz"];
+
+/* 线条上色 / 「有票」判定所用席别 = **所选席别中等级最低且当前有票的那个**。
+   取最低而不是最高：出现「只有商务座有票」时若标成琥珀色，会让人以为整趟车都能买，
+   而实际想买的二等座早已售罄 —— 用最低等级表示「这趟车最便宜的可用选择」。 */
+function lowSeat(seats){
+  let b=null;
+  for(const k in seats){const s=seats[k];
+    if(!seatSel.has(k)) continue;
+    if(isTick(s.a)){const m=SEAT[k];if(m&&(!b||m.r<b.m.r))b={k,m,s};}}
+  return b;
+}
+function minPrice(seats){
+  let p=null;
+  for(const k in seats){const v=seats[k].p;
+    if(v!=null&&seatSel.has(k)&&(p===null||v<p))p=v;}
+  return p;
+}
+/* 「起价」= 所选席别中**当前有票**的最低票价。
+   全都无票时返回 null，表里显示 --（此时用它排序也排在最后）。 */
+function salePrice(seats){
+  let p=null;
+  for(const k in seats){
+    const s=seats[k];
+    if(!seatSel.has(k)||!isTick(s.a)||s.p==null) continue;
+    if(p===null||s.p<p) p=s.p;
+  }
+  return p;
+}
+function buildTrains(){
+  TRAINS=DATA.trains.map(t=>Object.assign({},t,{
+    best:lowSeat(t.seats), saleP:salePrice(t.seats), minP:minPrice(t.seats),
+    hasLive:Object.keys(t.seats).some(k=>t.seats[k].a!=null)
+  }));
+  /* 数据源变了：作废表格指纹，强制重建（否则车次集合恰好相同时
+     会跳过重绘，价格与余票停留在旧值）；同时清掉已不存在的勾选 */
+  tblSig="";
+  const keys=new Set(TRAINS.map(fkey));
+  selected=new Set(Array.from(selected).filter(k=>keys.has(k)));
+}
+
+/* 当前数据集里出现过的席别（按等级从高到低） */
+function seatKeys(){
+  const s=new Set();
+  TRAINS.forEach(t=>Object.keys(t.seats).forEach(k=>s.add(k)));
+  return SEAT_ORDER.filter(k=>s.has(k));
+}
+/* 车型按钮：正常模式一行（用全名）；中转模式两行、每行要放 5~6 个，
+   侧栏放不下，所以改用紧凑标签，全名放到 title 里。 */
+function typeBtn(k,on,leg,short){
+  const full=TYPE_LABEL[k]||k;
+  const txt=short?(k==="N"?"数字":k):full;
+  return `<button class="f${on?" on":""}" data-ty="${k}" data-leg="${leg}"`+
+         ` title="${full}">${txt}</button>`;
+}
+function renderTypes(){
+  const el=document.getElementById("typegrp");
+  if(TRANSFER&&TRANSFER.data){
+    el.innerHTML=[1,2].map(leg=>{
+      const keys=typesOf(leg), set=legFilter(leg);
+      const allOn=keys.length>0&&keys.every(k=>set.has(k));
+      const shown=routeTrains().filter(t=>t.leg===leg&&visible(t)).length;
+      const total=routeTrains().filter(t=>t.leg===leg).length;
+      return `<div class="trow"><span class="lbl">第${leg}程</span>`+
+        `<button class="f${allOn?" on":""}" data-tall="${leg}" data-leg="${leg}"`+
+        ` title="第${leg}程全部车型">全部</button>`+
+        keys.map(k=>typeBtn(k,set.has(k),leg,true)).join("")+
+        `<span class="tcnt" title="第${leg}程：当前可见 / 总趟数">${shown}/${total}</span></div>`;
+    }).join("");
+  }else{
+    const keys=typesOf(0);
+    const allOn=keys.length>0&&keys.every(k=>typeSel.has(k));
+    el.innerHTML=`<div class="trow"><span class="lbl">车型</span>`+
+      `<button class="f${allOn?" on":""}" data-tall="0" data-leg="0">全部</button>`+
+      keys.map(k=>typeBtn(k,typeSel.has(k),0,false)).join("")+`</div>`;
+  }
+}
+function renderSeats(){
+  const keys=seatKeys();
+  document.getElementById("seatgrp").innerHTML=
+    `<span class="lbl">席别</span>`+
+    keys.map(k=>{
+      const m=SEAT[k], on=seatSel.has(k);
+      return `<button class="f${on?" on":""}" data-seat="${k}"`+
+        (on?` style="background:${m.c};border-color:${m.c}"`:"")+`>${m.n}</button>`;
+    }).join("")+
+    `<span class="qhint" id="seathint"></span>`;
+  const n=seatSel.size;
+  document.getElementById("seathint").innerHTML=
+    `已选 <b>${n}</b> 个　`+
+    `<button data-seat-def="1">默认</button>`+
+    `<button data-seat-all="1">全选</button>`+
+    `<button data-seat-none="1">清空</button>`;
+}
+function renderLegend(){
+  document.getElementById("legSeats").innerHTML=
+    Object.keys(SEAT).map(k=>{
+      const on=seatSel.has(k);
+      return `<span class="sw" style="opacity:${on?1:.34}">`+
+        `<span class="dot" style="background:${SEAT[k].c}"></span>${SEAT[k].n}</span>`;
+    }).join("")
+    +`<span class="sw"><span class="dot" style="background:${GREY}"></span>售罄</span>`;
+}
+function renderTabs(){
+  document.getElementById("tabs").innerHTML=ROUTES.map(r=>{
+    const c=TRAINS.filter(t=>t.route===r).length;
+    return `<button class="tab" data-r="${r}">${r}<span class="cnt">${c}</span></button>`;
+  }).join("");
+  document.querySelectorAll("#tabs .tab").forEach(b=>{
+    b.addEventListener("click",()=>selectTab(b.dataset.r));
+  });
+}
+
+const NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById("chart");
+function el(n,a){const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;}
+const DOT_MID=3.4, DOT_END=4.8;
+/* 顶点形状。中转行涉及多个实际车站（徐州 / 徐州东）时，用不同形状区分：
+   0 实心圆（默认）· 1 空心圆 · 2 实心方块 · 3 空心方块
+   实心/空心一眼可辨，且不依赖线条本身的颜色。 */
+function dotAt(cx,cy,r,col,style,sw){
+  if(style===1) return el("circle",{cx,cy,r:r+0.6,fill:"#fff",
+    stroke:col,"stroke-width":2});
+  if(style===2) return el("rect",{x:cx-r,y:cy-r,width:2*r,height:2*r,
+    fill:col,stroke:"#fff","stroke-width":1.4});
+  if(style===3) return el("rect",{x:cx-r,y:cy-r,width:2*r,height:2*r,
+    fill:"#fff",stroke:col,"stroke-width":1.7});
+  return el("circle",{cx,cy,r,fill:col,stroke:"#fff","stroke-width":sw});
+}
+const HUB_MARK=["●","○","■","□"];      // 与上面 0~3 号样式一一对应，用于行内图例
+
+/* ---------- 时间轴缩放条 ----------
+   轨道 = 数据完整时段（ZRANGE），高亮块 = 当前可视时段（ZVIEW）。
+   拖高亮块可平移、拖两端把手可缩放、点「重置」回到自适应。 */
+function updateZBar(){
+  const bar=document.getElementById("zbar");
+  if(!ZRANGE||ZRANGE.t1-ZRANGE.t0<=0||!CUR_AXIS.length){
+    bar.style.display="none"; return;
+  }
+  bar.style.display="flex";
+  const span=ZRANGE.t1-ZRANGE.t0;
+  const v=ZVIEW||{t0:ZRANGE.t0, t1:ZRANGE.t1};
+  const a=Math.max(0,Math.min(1,(v.t0-ZRANGE.t0)/span));
+  const b=Math.max(0,Math.min(1,(v.t1-ZRANGE.t0)/span));
+  const sel=document.getElementById("zSel");
+  sel.style.left=(a*100).toFixed(3)+"%";
+  sel.style.width=Math.max(0.6,(b-a)*100).toFixed(3)+"%";
+  document.getElementById("zLabel").innerHTML= ZVIEW
+    ? `<b>${fmtT(v.t0)} – ${fmtT(v.t1)}</b>　跨 ${(v.t1-v.t0).toFixed(2)} 小时　`+
+      `<span style="color:#185FA5">已缩放</span>　`+
+      `<span style="color:#a8a69f">滚轮可继续缩放 · 双击重置</span>`
+    : `<b>全时段 ${fmtT(v.t0)} – ${fmtT(v.t1)}</b>　跨 ${(v.t1-v.t0).toFixed(2)} 小时　`+
+      `<span style="color:#a8a69f">在时间轴上滚轮缩放 · 拖动可平移</span>`;
+}
+let zDrag=null;
+(function(){
+  const track=document.getElementById("zTrack");
+  track.addEventListener("pointerdown",e=>{
+    if(!ZRANGE||!CUR_AXIS.length) return;
+    const r=track.getBoundingClientRect();
+    if(!r.width) return;
+    const g=(e.target.dataset&&e.target.dataset.g)||"move";
+    zDrag={mode:g, x0:e.clientX, r:r,
+           v0:ZVIEW||{t0:ZRANGE.t0, t1:ZRANGE.t1},
+           perPx:(ZRANGE.t1-ZRANGE.t0)/r.width};
+    try{ track.setPointerCapture(e.pointerId); }catch(err){}
+    e.preventDefault();
+  });
+  track.addEventListener("pointermove",e=>{
+    if(!zDrag) return;
+    const dx=(e.clientX-zDrag.x0)*zDrag.perPx;
+    const MIN=0.5;                       // 最窄 0.5 小时
+    let a=zDrag.v0.t0, b=zDrag.v0.t1;
+    if(zDrag.mode==="move"){
+      const w=b-a;
+      a=Math.max(ZRANGE.t0, Math.min(ZRANGE.t1-w, a+dx));
+      b=a+w;
+    }else if(zDrag.mode==="l"){
+      a=Math.max(ZRANGE.t0, Math.min(b-MIN, a+dx));
+    }else{
+      b=Math.min(ZRANGE.t1, Math.max(a+MIN, b+dx));
+    }
+    ZVIEW={t0:a, t1:b};
+    drawChart();
+  });
+  const stop=()=>{ zDrag=null; };
+  track.addEventListener("pointerup",stop);
+  track.addEventListener("pointercancel",stop);
+  document.getElementById("zReset").addEventListener("click",()=>{
+    ZVIEW=null; drawChart();
+  });
+  /* 双击缩放条 = 重置为默认（与「重置」按钮同效） */
+  document.getElementById("zbar").addEventListener("dblclick",()=>{
+    if(!ZVIEW) return;
+    ZVIEW=null; drawChart();
+  });
+})();
+
+/* ---------- 滚轮缩放（只在下方时间轴上进行） ----------
+   鼠标停在**时间轴**上滚动即可缩放：上滚放大、下滚缩小；指针所指的时刻保持不动。
+   运行图本身不响应滚轮 —— 否则会和页面滚动抢事件，且容易误触。
+   可视范围存在 ZVIEW，drawChart 会优先用它；null 表示按数据自适应。 */
+function onZoomWheel(e){
+  if(!ZRANGE||!CUR_AXIS.length) return;
+  if(e.target&&e.target.id==="zReset") return;   // 停在「重置」按钮上时不缩放
+  const track=document.getElementById("zTrack");
+  const r=track.getBoundingClientRect();
+  if(!r.width) return;
+  e.preventDefault();                         // 阻止页面随之滚动
+
+  /* 轨道整段代表数据全时段，据此把鼠标位置换算成时刻 */
+  const spanAll=ZRANGE.t1-ZRANGE.t0;
+  const f=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+  const tPtr=ZRANGE.t0+f*spanAll;
+
+  const v=ZVIEW||{t0:ZRANGE.t0, t1:ZRANGE.t1};
+  /* 指针落在当前可视窗内 → 以它为准（就地缩放，指针下的时刻保持在原位）；
+     落在窗外 → 以窗口中心为准（af 取 0.5），这样放大/缩小时画面不会跳走。
+     注意 af 取自**当前视窗**的比例，不是整条轨道的比例 —— 后者会让锚点
+     在缩小时发生偏移（光标下的时刻其实没稳住）。 */
+  const inside=(tPtr>=v.t0-1e-9&&tPtr<=v.t1+1e-9);
+  const af=inside?((tPtr-v.t0)/(v.t1-v.t0)):0.5;
+  const anchor=inside?tPtr:(v.t0+v.t1)/2;
+
+  const span=v.t1-v.t0;
+  const k=(e.deltaY<0)?0.82:(1/0.82);
+  const ns=Math.max(0.5, Math.min(spanAll, span*k));   // 上下限：0.5 小时 ~ 全时段
+  if(ns>=spanAll-1e-6){ ZVIEW=null; drawChart(); return; }   // 放到最大 = 复位
+
+  let t0=anchor-af*ns, t1=t0+ns;
+  if(t0<ZRANGE.t0){ t1+=ZRANGE.t0-t0; t0=ZRANGE.t0; }   // 贴边钳制（整体平移，不改变跨度）
+  if(t1>ZRANGE.t1){ t0-=t1-ZRANGE.t1; t1=ZRANGE.t1; }
+  ZVIEW={t0, t1};
+  drawChart();                                // 同步重绘，滚轮已被浏览器合并，这样更跟手
+}
+document.getElementById("zbar").addEventListener("wheel",onZoomWheel,{passive:false});
+
+/* 当前要画的 / 列出的车次集合。
+   正常模式 = 本通道车次；中转模式 = 该站两程的全部车次。
+   所有下游（图、表、排序、筛选）都走这里，所以中转是「整体切换数据源」。 */
+function routeTrains(){
+  if(!TRANSFER) return TRAINS.filter(t=>t.route===curRoute);
+  if(!TRANSFER.data) return [];                  // 查询中：图上一时无车
+  if(TRANSFER.items) return TRANSFER.items;      // 依赖 TRANSFER + CUR_AXIS，可缓存
+  const cities=CUR_AXIS, vr=TRANSFER.row, out=[];
+  TRANSFER.data.legs.forEach((leg,i)=>{
+    const aName=cities[i===0?0:vr], bName=cities[i===0?vr:cities.length-1];
+    leg.trains.forEach(t=>{
+      const it=Object.assign({},t,{
+        leg:i+1,
+        key:"L"+(i+1)+"|"+t.code+"|"+t.dep+"|"+t.from+"|"+t.to,
+        stops:[[t.from,aName,t.dep],[t.to,bName,t.arr]],
+        /* 该车在中转站用的是哪个**实际车站**（徐州 / 徐州东）。
+           第 1 程看到达站，第 2 程看出发站。 */
+        hubSt:(i===0?t.to:t.from),
+      });
+      it.best=lowSeat(it.seats);
+      it.minP=minPrice(it.seats);
+      it.saleP=salePrice(it.seats);
+      it.hasLive=Object.keys(it.seats).some(k=>it.seats[k].a!=null);
+      out.push(it);
+    });
+  });
+  TRANSFER.items=out;
+  /* 中转行若涉及多个实际车站（徐州 + 徐州东），就要用不同的点区分开。
+     按「车次多的排前面」定顺序，这样样式分配稳定、不会每次刷新对调。 */
+  const sts=[];
+  out.forEach(t=>{ if(!sts.includes(t.hubSt)) sts.push(t.hubSt); });
+  sts.sort((a,b)=>{
+    /* 与城市同名的车站排最前（徐州 → 徐州东），读起来更自然；其余按车次多少 */
+    const city=TRANSFER.via;
+    if(a===city&&b!==city) return -1;
+    if(b===city&&a!==city) return 1;
+    const ca=out.filter(x=>x.hubSt===a).length, cb=out.filter(x=>x.hubSt===b).length;
+    return cb-ca || String(a).localeCompare(String(b),"zh");
+  });
+  TRANSFER.hub={stations:sts, diff:sts.length>1};
+  return out;
+}
+/* 车次唯一键：中转项自带 key，普通车次用 code|dep */
+/* 车次唯一键。**必须带上到发站**：12306 会把同一趟车按不同到达站各返回一条
+   （如 G2066「郑州东→徐州东」与「郑州东→徐州」同时刻），只用「车次+时刻」
+   会让两条记录撞成同一个键 —— 勾一辆等于勾两辆。 */
+function fkey(tr){ return tr.key || (tr.code+"|"+tr.dep+"|"+tr.from+"|"+tr.to); }
+/* 明细行的 DOM id（同 fkey 一一对应，保证唯一） */
+function rowId(tr){ return "row-"+String(fkey(tr)).replace(/[^0-9A-Za-z]/g,"_"); }
+
+/* ---------- 中转：点站名只做「选中」，真正的取数统一走「刷新数据」按钮 ---------- */
+/* 中转模式默认只看有票：进入时记录原状态并打开，离开时还原 */
+let onlyTickBefore=null;
+function setOnlyTick(v){
+  onlyTick=v;
+  const cb=document.getElementById("onlyTicket");
+  if(cb) cb.checked=v;
+}
+function enterOnlyTick(){
+  if(onlyTickBefore!==null) return;      // 已在中转模式内，别覆盖用户的手动改动
+  onlyTickBefore=onlyTick;
+  setOnlyTick(true);
+}
+function leaveOnlyTick(){
+  if(onlyTickBefore===null) return;
+  setOnlyTick(onlyTickBefore);
+  onlyTickBefore=null;
+}
+/* 中转提示条里那截「显示 N / M 趟」的文案：随筛选实时变化，
+   所以单独放进 #tCount，由 apply() 更新，不去重建整个提示条（免得丢按钮监听器） */
+function tCountHTML(){
+  if(!TRANSFER||!TRANSFER.data) return "";
+  const all=routeTrains();
+  const tickN=all.filter(t=>t.best).length;
+  const shown=all.filter(visible).length;
+  if(onlyTick&&tickN===0){
+    return `<span style="color:#A32D2D"><b>当前所选席别下两程均无有票车次</b>，`+
+           `图上暂时为空 —— 可取消勾选「仅看有票」，或加选商务座 / 一等座</span>`;
+  }
+  return `<span class="muted">${onlyTick
+    ? `仅看有票：显示 <b>${shown}</b> / ${all.length} 趟`
+    : `显示全部 <b>${all.length}</b> 趟`}</span>`;
+}
+function updateTCount(){
+  const e=document.getElementById("tCount");
+  if(e) e.innerHTML=tCountHTML();
+}
+function exitTransfer(){
+  VIA=null;
+  if(TRANSFER){ TRANSFER=null; selected.clear(); leaveOnlyTick(); computeAxis(); }
+  ZVIEW=null;
+  renderRouteLine(); drawChart();
+}
+function onAxisClick(city){
+  /* 再点同一站名 = 取消选中（若已查过则一并退出中转） */
+  if(VIA===city){ exitTransfer(); return; }
+  VIA=city;
+  /* 选中的只是「准备查询哪个站」；旧结果立即作废，图先回到主数据集 */
+  if(TRANSFER){ TRANSFER=null; selected.clear(); leaveOnlyTick(); computeAxis(); }
+  renderRouteLine(); drawChart();
+}
+async function loadTransfer(via){
+  if(!CAN_API){
+    alert("中转查询需要本地服务：请先双击项目里的「启动.bat」，再从 http 地址打开页面。");
+    return;
+  }
+  const row=CUR_AXIS.indexOf(via);
+  if(row<0) return;
+  TRANSFER={via, row, data:null, loading:true, items:null};
+  selected.clear();
+  ZVIEW=null;                      // 换了一整套数据，时间窗按新数据自适应
+  renderRouteLine(); drawChart();
+  const date=(DATA.meta||{}).travel_date||"";
+  try{
+    /* force=1：刷新按钮的语义就是「要最新的」，所以绕过服务端缓存重新抓取 */
+    const r=await fetch("/api/transfer?via="+encodeURIComponent(via)+
+                        "&date="+encodeURIComponent(date)+"&force=1");
+    const j=await r.json();
+    if(!j.ok) throw new Error(j.error||"服务端返回失败");
+    if(!TRANSFER||TRANSFER.via!==via) return;        // 期间用户已切走
+    TRANSFER.data=j.data;
+    TRANSFER.loading=false;
+    TRANSFER.cached=!!j.cached;
+    TRANSFER.row=CUR_AXIS.indexOf(via);
+    enterOnlyTick();                 // 中转默认只看有票
+  }catch(e){
+    if(!TRANSFER||TRANSFER.via!==via) return;
+    TRANSFER=null;
+    selected.clear();
+    computeAxis(); drawChart();
+    const desc=document.getElementById("rtDesc");
+    desc.innerHTML=`<span style="color:#A32D2D">中转查询失败：${e.message}</span>`+
+                   `　<span class="muted">（可再点一次「刷新数据」重试）</span>`;
+    setTimeout(()=>{ if(!TRANSFER) renderRouteLine(); },7000);
+    return;
+  }
+  renderRouteLine(); drawChart();
+}
+
+/* 由当前通道每趟车的**实际经停**推导车站轴（数据缺失时的兜底） */
+function deriveAxis(list){
+  const sum={}, cnt={};
+  list.forEach(tr=>{
+    const seq=[];
+    tr.stops.forEach(s=>{if(!seq.length||seq[seq.length-1]!==s[0])seq.push(s[0]);});
+    const d=Math.max(1,seq.length-1);
+    seq.forEach((n,i)=>{sum[n]=(sum[n]||0)+i/d;cnt[n]=(cnt[n]||0)+1;});
+  });
+  return Object.keys(sum).sort((a,b)=>
+    (sum[a]/cnt[a])-(sum[b]/cnt[b])||cnt[b]-cnt[a]||(a<b?-1:1));
+}
+/* 按「车站」档位过滤当前通道的车站轴；剔除无车停靠的站，首末站必留。
+   all  = 该通道全部真实停靠站
+   main = 人工白名单（MAIN_STATIONS）+ 首末站
+   hub  = 停靠车次 ≥ 通道车次数的 60% */
+function computeAxis(){
+  const all=(DATA.axes&&DATA.axes[curRoute])||[];
+  const fr=(DATA.freq&&DATA.freq[curRoute])||null;
+  /* 车站频次与「枢纽站」阈值永远按**本通道的车次**算。
+     不能用 routeTrains()：中转模式下它会返回两程的 200+ 趟，
+     阈值被抬高到没有任何站能达标，轴会退化成完整列表。 */
+  const base=TRAINS.filter(t=>t.route===curRoute);
+  let full;
+  if(all.length){
+    full=all.slice();
+    if(fr) full=full.filter((s,i)=>i===0||i===full.length-1||(fr[s]||0)>0);
+  }else{
+    full=deriveAxis(base);               // 兜底：直接从每趟车的实际经停合并
+  }
+  CUR_AXIS_FULL=full;
+  if(!full.length){CUR_AXIS=[];return;}
+  if(density==="all"){CUR_AXIS=full.slice();return;}
+  let kept;
+  if(density==="main"){
+    const wl=new Set(MAIN_STATIONS[curRoute]||[]);
+    kept=full.filter((s,i)=>i===0||i===full.length-1||wl.has(s));
+  }else{
+    const n=base.length;
+    const th=Math.max(2,Math.ceil(n*0.6));
+    kept=full.filter((s,i)=>i===0||i===full.length-1||((fr||{})[s]||0)>=th);
+  }
+  CUR_AXIS=kept.length>=3?kept:full.slice();
+}
+/* ---------- 车型筛选（多选；中转模式下第 1 / 2 程各自独立） ----------
+   正常模式用 typeSel；中转模式用 TRANSFER.tf[leg]（懒初始化，随 TRANSFER 一起销毁）。 */
+function typesOf(leg){
+  const arr = leg
+    ? routeTrains().filter(t=>t.leg===leg)          // 该程出现的车型
+    : TRAINS.filter(t=>t.route===curRoute);         // 本通道出现的车型
+  const s=new Set();
+  arr.forEach(t=>s.add(tkey(t)));
+  return TYPE_ORDER.filter(k=>s.has(k));
+}
+function legFilter(leg){
+  if(!TRANSFER.tf) TRANSFER.tf={};
+  if(!TRANSFER.tf[leg]){
+    const all=typesOf(leg);
+    /* 继承进入中转前的车型选择。两种例外：
+       ① 之前就是「全部」（本通道车型全选）→ 该程也全部，否则本程独有的车型
+          （如第 2 程的特快 / 数字车次）会被无声筛掉；
+       ② 该程压根没有所选车型 → 退回该程全部，免得整片空白让人以为查询失败。 */
+    const all0=typesOf(0);
+    const wasAll=all0.length>0&&all0.every(k=>typeSel.has(k));
+    const keep=wasAll?all:all.filter(k=>typeSel.has(k));
+    TRANSFER.tf[leg]=new Set(keep.length?keep:all);
+  }
+  return TRANSFER.tf[leg];
+}
+function curTypeSet(t){
+  return (TRANSFER&&TRANSFER.data&&t&&t.leg)?legFilter(t.leg):typeSel;
+}
+function passType(t){
+  const s=curTypeSet(t);
+  return !!s&&s.size>0&&s.has(tkey(t));
+}
+/* 搜索匹配：支持完整车次(G1988)、纯数字(1988 / 19)、前缀(K5) */
+function qNorm(s){return String(s==null?"":s).toUpperCase().replace(/\s+/g,"");}
+function matchQ(t){
+  if(!query) return true;
+  const c=String(t.code).toUpperCase();
+  const num=(c.match(/\d+/)||[""])[0];
+  return c.indexOf(query)>=0||(num&&num.indexOf(query)>=0);
+}
+function visible(t){return passType(t)&&(!onlyTick||!!t.best)&&matchQ(t);}
+
+function stopPoints(tr,cities){
+  const out=[]; let prev=null;
+  tr.stops.forEach(s=>{
+    /* stops 元素 = [实际站名, 所属城市行, 时刻]（旧数据为 [城市, 时刻]）
+       实际站名只用于标注（如「郑州东」），定位一律用城市行，
+       所以同城双站会落在同一行上、按时间左右分开 —— 这正是要的效果。 */
+    const st=s[0], city=(s.length>2?s[1]:s[0]), txt=(s.length>2?s[2]:s[1]);
+    const ci=cities.indexOf(city);
+    if(ci<0) return;
+    let h=parseT(txt);
+    if(h===null) return;
+    while(prev!==null&&h<prev) h+=24;
+    prev=h; out.push([h,ci,txt,st]);    // [绝对小时, 轴索引, 时刻文本, 实际站名]
+  });
+  return out;
+}
+
+function drawChart(){
+  svg.innerHTML="";
+  const cities=CUR_AXIS, list=routeTrains();
+  let t0=99,t1=-1;
+  list.forEach(tr=>{const p=stopPoints(tr,cities);
+    if(p.length){t0=Math.min(t0,p[0][0]);t1=Math.max(t1,p[p.length-1][0]);}});
+  if(t1<0){t0=0;t1=24;}
+  t0=Math.floor(t0-0.5); t1=Math.ceil(t1+0.5);
+  if(t1-t0<6) t1=t0+6;
+  ZRANGE={t0,t1};                  // 数据完整范围 —— 缩放条的轨底
+  if(ZVIEW){                       // 滚轮/拖条缩放：用用户选定的可视时间窗
+    t0=ZVIEW.t0; t1=ZVIEW.t1;
+  }
+
+  // 行高自适应：站多则压缩，保证整图高度可控
+  const rowH=Math.max(19,Math.min(32,Math.round(600/Math.max(1,cities.length-1))));
+  const dMid=Math.max(2.3,Math.min(DOT_MID,rowH*0.075));
+  const dEnd=Math.max(3.2,Math.min(DOT_END,rowH*0.105));
+  const W=1280,L=86,R=24,T=40,B=52;
+  const H=T+(cities.length-1)*rowH+B;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const PW=W-L-R;
+  const x=t=>L+(t-t0)/(t1-t0)*PW, y=i=>T+i*rowH;
+  /* 记下本次的坐标映射，滚轮换算鼠标位置时要用 */
+  XV={t0,t1,L,PW,W,H};
+
+  if(t0<24&&t1>24) svg.appendChild(el("rect",{x:x(24),y:T,width:W-R-x(24),
+    height:H-T-B,fill:"#faf9f5"}));
+
+  const rmap=(DATA.rowst&&DATA.rowst[curRoute])||{};
+  cities.forEach((c,i)=>{
+    svg.appendChild(el("line",{x1:L,y1:y(i),x2:W-R,y2:y(i),
+      stroke:"#e8e6dd","stroke-width":0.6}));
+    const last=(i===cities.length-1);
+    /* 站名高亮跟随「选中」状态（VIA），而不是「已出结果」（TRANSFER），
+       否则选中后到点刷新之前看不出自己选了哪一站 */
+    const onVia=!!(VIA&&VIA===c);
+    const base=onVia?"#C2410C":((i===0||last)?"#2c2c2a":"#5f5e5a");
+    const tx=el("text",{x:L-10,y:y(i),"text-anchor":"end","class":"ylab",
+      "dominant-baseline":"central","font-size":12,
+      fill:base,"font-weight":(i===0||last||onVia)?600:400});
+    tx.textContent=c;
+    /* 该城市行含哪些实际车站（郑州 / 郑州东 / 郑州航空港）放进 title，
+       不在标签旁边显示数字；点击站名 = 查询经此站中转。 */
+    const names=rmap[c]||[];
+    tx.setAttribute("title", (names.length>1? names.join(" / ")+"：" : "")
+                            + "点击查询经「"+c+"」中转");
+    tx.style.cursor="pointer";
+    tx.addEventListener("click",()=>onAxisClick(c));
+    tx.addEventListener("mouseenter",()=>{ if(!onVia) tx.setAttribute("fill","#185FA5"); });
+    tx.addEventListener("mouseleave",()=>{ if(!onVia) tx.setAttribute("fill",base); });
+    svg.appendChild(tx);
+  });
+
+  /* 中转模式下：把中转站那一行标成醒目的分隔线 */
+  if(TRANSFER&&TRANSFER.row>=0&&TRANSFER.row<cities.length){
+    const vr=TRANSFER.row;
+    svg.appendChild(el("line",{x1:L,y1:y(vr),x2:W-R,y2:y(vr),
+      stroke:"#C2410C","stroke-width":1.3,"stroke-dasharray":"7,4",opacity:.75}));
+    const tg=el("text",{x:W-R-2,y:y(vr)-5,"text-anchor":"end","font-size":10,
+      fill:"#C2410C","font-weight":600});
+    tg.textContent="⟳ 中转站";
+    /* 该行有两个车站时，把「哪种点 = 哪个站」写在行内，否则形状无从解读 */
+    if(TRANSFER.hub&&TRANSFER.hub.diff){
+      tg.textContent+="　"+TRANSFER.hub.stations.map((s,i)=>
+        HUB_MARK[i]+" "+s).join("　");
+    }
+    svg.appendChild(tg);
+  }
+
+  /* 刻度步长随缩放自适应：放得越大，刻度越细（0.5 小时 ≈ 30 分） */
+  const span=t1-t0;
+  const step=span<=3?0.25:(span<=6?0.5:(span<=12?1:(span<=26?2:4)));
+  const h0=Math.ceil(t0/step)*step;
+  for(let h=h0;h<=t1+1e-9;h+=step){
+    const isDay=Math.abs(h-24)<1e-9;
+    svg.appendChild(el("line",{x1:x(h),y1:T,x2:x(h),y2:H-B,
+      stroke:isDay?"#b4b2a9":"#eceae2","stroke-width":isDay?1:0.6,
+      "stroke-dasharray":isDay?"4,3":"none"}));
+    const hh=Math.floor(h+1e-9)%24, mm=Math.round((h-Math.floor(h+1e-9))*60);
+    const lb=el("text",{x:x(h),y:T-12,"text-anchor":"middle","font-size":10.5,
+      fill:h>=24?"#a8a69f":"#5f5e5a"});
+    lb.textContent=String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0");
+    svg.appendChild(lb);
+  }
+  if(t0<24&&t1>24){
+    const dn=el("text",{x:x(24)+6,y:T+14,"font-size":10.5,fill:"#a8a69f"});
+    dn.textContent="次日"; svg.appendChild(dn);
+  }
+  svg.appendChild(el("line",{x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:"#d3d1c7","stroke-width":0.8}));
+  const ax=el("text",{x:W-R,y:H-B+28,"text-anchor":"end","font-size":11,fill:"#888780"});
+  ax.textContent="时刻"; svg.appendChild(ax);
+
+  /* 左下角：当前可视时段提示（重置入口在下方缩放条上） */
+  {
+    const zh=el("text",{x:L,y:H-B+28,"font-size":11,
+      fill:ZVIEW?"#185FA5":"#c4c2b9"});
+    zh.textContent=ZVIEW
+      ? `已缩放至 ${fmtT(t0)}–${fmtT(t1)}（跨 ${(t1-t0).toFixed(2)} 小时）`
+      : "如需缩放，把鼠标移到下方时间轴上滚动滚轮";
+    svg.appendChild(zh);
+  }
+
+  const gVis=el("g",{}), gHit=el("g",{});
+  svg.appendChild(gVis); svg.appendChild(gHit);
+  lineEls=[];
+
+  list.forEach((tr,idx)=>{
+    const tp=tinfo(tr);
+    const col=tr.best?tr.best.m.c:(tr.hasLive?GREY:UNK);
+    const raw=stopPoints(tr,cities);
+    if(!raw.length) return;
+    const pts=raw.map(p=>[x(p[0]),y(p[1])]);
+    const g=el("g",{});
+    const pl=el("polyline",{points:pts.map(p=>p.join(",")).join(" "),
+      fill:"none",stroke:col,"stroke-width":tp.w,
+      "stroke-dasharray":tp.dash,"stroke-linecap":"round","stroke-linejoin":"round",
+      opacity:tr.best?0.95:0.55});
+    g.appendChild(pl);
+
+    /* 顶点。中转行若涉及两个实际车站（徐州 / 徐州东），按车站换用不同形状，
+       否则「第 1 程到徐州东、第 2 程从徐州走」这种接不上站的组合看不出来。 */
+    const gDots=el("g",{});
+    const hubRow=(TRANSFER&&TRANSFER.data&&TRANSFER.hub&&TRANSFER.hub.diff)
+      ? TRANSFER.row : -1;
+    pts.forEach((p,i)=>{
+      const isEnd=(i===0||i===pts.length-1);
+      let style=0;
+      /* 注意：p 是像素点，判断「是否在中转行」要用 raw[i][1]（轴上的行号） */
+      if(hubRow>=0&&raw[i][1]===hubRow&&tr.hubSt){
+        const k=TRANSFER.hub.stations.indexOf(tr.hubSt);
+        if(k>0) style=k;
+      }
+      gDots.appendChild(dotAt(p[0],p[1],isEnd?dEnd:dMid,col,style,isEnd?1.6:1.2));
+    });
+    g.appendChild(gDots);
+
+    /* 选中时才显示的各站到发时刻。
+       同一座城市停了多个站（郑州 + 郑州东）时：
+         · 把站名一并标出，否则两个点只有时刻、看不出是不同车站；
+         · 两点横向往往只差十几像素、文字会重叠，所以按次序上下错开。 */
+    const gT=el("g",{style:"display:none"});
+    const rowCnt={}, rowSeq={};
+    raw.forEach(p=>{rowCnt[p[1]]=(rowCnt[p[1]]||0)+1;});
+    raw.forEach((p,i)=>{
+      const multi=rowCnt[p[1]]>1;
+      const seq=(rowSeq[p[1]]=(rowSeq[p[1]]||0)+1);
+      const dy=multi?(2+(seq-1)*11):3;           // 逐个依次下移，避免横向重叠
+      const t=el("text",{x:pts[i][0]+Math.round(dEnd+5),y:pts[i][1]+dy,
+        "font-size":9.5,fill:"#2c2c2a","paint-order":"stroke",stroke:"#fff",
+        "stroke-width":3,"stroke-linejoin":"round"});
+      t.textContent=((multi||(hubRow>=0&&p[1]===hubRow))?p[3]+" ":"")+p[2];
+      gT.appendChild(t);
+    });
+    g.appendChild(gT);
+
+    const fr=0.16+0.66*((idx*0.6180339887)%1);
+    const pos=fr*(pts.length-1);
+    const si=Math.min(Math.floor(pos),pts.length-2), st=pos-si;
+    const px=pts[si][0]+(pts[si+1][0]-pts[si][0])*st;
+    const py=pts[si][1]+(pts[si+1][1]-pts[si][1])*st;
+    const lb=el("text",{x:px+9,y:py-4,"font-size":10,fill:col,
+      "paint-order":"stroke",stroke:"#fff","stroke-width":3,
+      "stroke-linejoin":"round","font-weight":tr.best?700:400});
+    lb.textContent=tr.code; g.appendChild(lb);
+
+    const hit=el("polyline",{points:pl.getAttribute("points"),fill:"none",
+      stroke:"transparent","stroke-width":13,"pointer-events":"stroke",
+      style:"cursor:pointer"});
+    gVis.appendChild(g); gHit.appendChild(hit);
+    lineEls.push({tr,g,pl,lb,hit,dots:gDots,times:gT,pts});
+
+    hit.addEventListener("mouseenter",e=>showTip(e,tr));
+    hit.addEventListener("mousemove",moveTip);
+    hit.addEventListener("mouseleave",hideTip);
+    hit.addEventListener("click",()=>{
+      toggleSel(fkey(tr));   // 点线 = 勾选/取消勾选表格首列
+      apply();
+    });
+  });
+  apply();
+  updateZBar();
+}
+
+const tip=document.getElementById("tip");
+function showTip(e,tr){
+  const tp=tinfo(tr);
+  const rows=Object.keys(tr.seats)
+    .sort((a,b)=>((seatSel.has(b)?1:0)-(seatSel.has(a)?1:0))||
+                 (SEAT_ORDER.indexOf(a)-SEAT_ORDER.indexOf(b)))
+    .map(k=>{
+    const s=tr.seats[k],m=SEAT[k];
+    let a;
+    if(s.a==null) a=`<span style="color:#888780">余票未知</span>`;
+    else if(s.a==="有") a=`<b style="color:#9FE1CB">有票</b>`;
+    else if(/^\d+$/.test(s.a)) a=`<b style="color:#9FE1CB">${s.a} 张</b>`;
+    else a=`<span style="color:#a8a69f">${s.a}</span>`;
+    const p=s.p!=null?`<span style="color:#d3d1c7"> ¥${s.p}</span>`:"";
+    return `<div style="opacity:${seatSel.has(k)?1:.42}">`+
+      `<span class="tt" style="background:${m.c}"></span>${m.n} ${a}${p}</div>`;
+  }).join("");
+  tip.innerHTML=`<div class="h">${tr.code} · ${tp.n}`+
+    (tr.leg?`　第 ${tr.leg} 程`:"")+`</div>
+    <div class="r">${tr.dep} → ${tr.arr} | 历时 ${tr.dur}</div>
+    <div class="r">${tr.from} → ${tr.to}${tr.route?" · "+tr.route:""}</div>
+    <div style="margin-top:6px;border-top:1px solid #4a4a47;padding-top:6px">${rows}</div>`;
+  tip.style.opacity="1"; moveTip(e);
+}
+function moveTip(e){
+  const pad=14;
+  const w=tip.offsetWidth||280, h=tip.offsetHeight||120;
+  let lx=e.clientX+pad, ty=e.clientY+pad;
+  // 右侧放不下就翻到左侧，左右保持同样的 14px 间距（用实测宽度，避免固定值造成的偏移）
+  if(lx+w>innerWidth-pad) lx=e.clientX-pad-w;
+  if(lx<pad) lx=pad;
+  if(lx+w>innerWidth-pad) lx=Math.max(pad,innerWidth-w-pad);
+  // 垂直方向同理
+  if(ty+h>innerHeight-pad) ty=e.clientY-pad-h;
+  if(ty<pad) ty=pad;
+  tip.style.left=lx+"px"; tip.style.top=ty+"px";
+}
+function hideTip(){tip.style.opacity="0";}
+
+function toggleSel(key){
+  if(selected.has(key)) selected.delete(key); else selected.add(key);
+}
+function apply(){
+  const anySel=selected.size>0;
+  /* 「高亮有票」= 相当于把这些有票车次在表格里勾选：
+     加粗、标出各站时刻、其余淡出。有手动勾选时以勾选为准。 */
+  const effSel=anySel?selected
+    :(hiTick?new Set(routeTrains().filter(t=>t.best).map(fkey)):new Set());
+  const anyEff=effSel.size>0;
+  lineEls.forEach(o=>{
+    const tr=o.tr, ok=visible(tr);
+    const isSel=effSel.has(fkey(tr));
+    const off=anyEff&&!isSel;
+    const hasTick=!!tr.best;
+    const v=ok?"":"none";
+    o.g.style.display=v; o.hit.style.display=v;
+    if(!ok) return;
+
+    const tp=tinfo(tr);
+    const baseW=tp.w;
+    o.pl.setAttribute("stroke-width",
+      isSel?(baseW*1.9).toFixed(2):baseW);
+    o.pl.setAttribute("opacity",
+      isSel?1:(off?0.09:(hasTick?0.95:0.55)));
+    o.dots.setAttribute("opacity", isSel?1:(off?0.10:1));
+    /* 这些车次要沿线标各站时刻，车次名标签会与时刻重叠 → 一律隐藏车次名 */
+    const showLb=!anyEff&&(lblAll||hasTick||!!query);
+    o.lb.style.display=showLb?"":"none";
+    o.lb.setAttribute("font-size","10");
+    o.lb.setAttribute("opacity", off?0.14:1);
+    o.times.style.display=isSel?"":"none";
+    if(isSel) o.g.parentNode.appendChild(o.g);      // 选中项置顶
+  });
+  if(tableSig()!==tblSig) renderTable();
+  markRow(effSel);
+  renderTblTitle();
+  updateTCount();          // 中转提示条里的「显示 N / M 趟」跟着筛选走
+}
+/* 勾选状态是唯一真源：表格勾选框与图上高亮都由它同步，不各自维护一份。
+   表头全选框按「当前列表」的全选 / 全不选，并显示半选态。 */
+function markRow(effSel){
+  const eff=effSel||selected;
+  /* 只取真正的车次行：中转分程小标题行（tr.tgrp）没有 data-key，
+     计入的话「全选」永远到不了满选态 */
+  const rows=document.querySelectorAll("#tbody tr[data-key]");
+  let on=0, real=0;
+  rows.forEach(r=>{
+    const k=r.dataset.key;
+    const isOn=eff.has(k);
+    r.classList.toggle("sel",isOn);
+    const c=r.querySelector("input.pick");
+    /* 勾选框只反映**真实勾选**：「高亮有票」让行高亮，但不伪造成已勾选 */
+    if(c) c.checked=selected.has(k);
+    if(isOn) on++;
+    if(selected.has(k)) real++;
+  });
+  const pa=document.getElementById("pickAll");
+  if(pa){                                  // 全选框 / 半选态同样只跟真实勾选走
+    pa.checked=rows.length>0&&real===rows.length;
+    pa.indeterminate=real>0&&real<rows.length;
+  }
+  return on?document.querySelector("#tbody tr.sel"):null;
+}
+function sortedVisible(){
+  const arr=routeTrains().filter(visible);
+  arr.sort((a,b)=>{
+    /* 中转模式：先按程分组（第1程在上、第2程在下），组内再按所选规则排 */
+    if(TRANSFER&&TRANSFER.data){
+      const la=a.leg||0, lb=b.leg||0;
+      if(la!==lb) return la-lb;
+    }
+    if(sortBy==="price"){
+      // 按「当前有售票价」升序；无票的排最后
+      const pa=a.saleP==null?1e9:a.saleP, pb=b.saleP==null?1e9:b.saleP;
+      if(pa!==pb) return pa-pb;
+    }
+    return hhmm(a.dep)-hhmm(b.dep);
+  });
+  return arr;
+}
+/* 表格内容指纹：只有行集/通道/排序/席别变了才重建 DOM。
+   单纯勾选/取消勾选不应重建表格——否则会把正在点的那个勾选框换掉（丢焦点）。 */
+let tblSig="";
+function tableSig(){
+  const list=sortedVisible();
+  return curRoute+"~"+(TRANSFER?("T:"+TRANSFER.via):"")+"~"+sortBy+"~"+
+         SEAT_ORDER.filter(k=>seatSel.has(k)).join(",")+"~"+
+         list.map(fkey).join(",");
+}
+function renderTblTitle(){
+  const list=sortedVisible();
+  const qTxt=query?` · 搜索「${query}」命中 ${list.length} 趟`:"";
+  const sTxt=selected.size?` · 已勾选 ${selected.size} 趟`:"";
+  let scope=curRoute, cnt=`${list.length} 趟`;
+  if(TRANSFER&&TRANSFER.data){
+    scope=`${curRoute} · 经 ${TRANSFER.via} 中转`;
+    cnt=`第1程 ${list.filter(t=>t.leg===1).length} 趟 · 第2程 `+
+        `${list.filter(t=>t.leg===2).length} 趟`;
+  }else if(TRANSFER){
+    scope=`${curRoute} · 经 ${TRANSFER.via} 中转`;
+  }
+  document.getElementById("tblTitle").textContent=
+    `车次明细 · ${scope}（${cnt} · ${sortBy==="price"?"按有售票价升序":"按发车时间"}${qTxt}${sTxt}）`;
+}
+function isNext(tr){return hhmm(tr.arr)<hhmm(tr.dep);}
+function renderTable(){
+  const list=sortedVisible();
+  tblSig=tableSig();
+  const rowHTML=tr=>{
+    const key=fkey(tr), on=selected.has(key);
+    const badges=Object.keys(tr.seats)
+      .sort((a,b)=>((seatSel.has(b)?1:0)-(seatSel.has(a)?1:0))||
+                   (SEAT_ORDER.indexOf(a)-SEAT_ORDER.indexOf(b)))
+      .map(k=>{
+      const s=tr.seats[k],m=SEAT[k],ok=isTick(s.a);
+      const onk=seatSel.has(k);
+      const av=s.a==null?"余票未知":s.a;
+      const p=s.p!=null?` ¥${s.p}`:"";
+      const txt=`${m.n} ${av}${p}`;
+      const dim=onk?"":"opacity:.34;";
+      return ok?`<span class="badge" style="background:${m.c};${dim}">${txt}</span>`
+               :`<span class="badge q" style="${dim}">${txt}</span>`;
+    }).join("");
+    const priceCell=tr.saleP!=null
+      ? `<span class="price">¥${tr.saleP}</span>`
+      : `<span style="color:var(--tx3)" title="${tr.minP!=null
+          ? "所选席别当前均无票；所选席别最低价 ¥"+tr.minP
+          : "所选席别无票价数据"}">--</span>`;
+    /* 起终站列：原样输出实测出发/到达站（郑州东 / 郑州航空港 / 常州北 …），
+       它是区分「同名车次多趟」的依据，所以不加括号、不压缩。 */
+    return `<tr id="${rowId(tr)}" data-key="${key}"${on?' class="sel"':""}>
+      <td class="pickcell"><input type="checkbox" class="pick"${on?" checked":""}></td>
+      <td><b>${tr.code}</b></td>
+      <td class="ends">${tr.from}<span class="arw">→</span>${tr.to}</td>
+      <td>${priceCell}</td>
+      <td>${badges}</td></tr>`;
+  };
+
+  /* 中转模式：两程分开成组，各给一条小标题行（含该程可见 / 总趟数）。
+     小标题行没有 data-key，所以点击、勾选、行高亮都会自然跳过它。 */
+  let html="";
+  if(TRANSFER&&TRANSFER.data){
+    const all=routeTrains();
+    [1,2].forEach(leg=>{
+      const grp=list.filter(t=>t.leg===leg);
+      const tot=all.filter(t=>t.leg===leg).length;
+      const d=TRANSFER.data.legs[leg-1]||{};
+      html+=`<tr class="tgrp"><td colspan="5">第 ${leg} 程 · ${d.from||""} → ${d.to||""}`+
+        `<span class="muted">　共 ${tot} 趟${grp.length!==tot?` · 当前显示 ${grp.length} 趟`:""}</span>`+
+        `</td></tr>`+grp.map(rowHTML).join("");
+    });
+  }else{
+    html=list.map(rowHTML).join("");
+  }
+  document.getElementById("tbody").innerHTML=html;
+}
+/* 只更新路由条里的文字，不重写整个容器 ——
+   因为「车站」那组按钮就住在这个容器里，innerHTML 重建会丢掉它们的事件绑定 */
+/* 路由条 = 当前视图的唯一状态条。
+   第二行 rtDesc：平时是经由说明；中转时改为「中转模式 …」或「已选中 X」或加载/错误提示。
+   右侧 rtRight：数据时间 + 退出中转 / 取消选中。 */
+function renderRouteLine(){
+  /* 车型行会随模式切换（正常一行 / 中转两行），跟着状态一起刷新。
+     它是路由条之外的唯一联动点，所以放在这里，避免各处漏调。 */
+  renderTypes();
+  routeLineBody();
+}
+function routeLineBody(){
+  const desc=document.getElementById("rtDesc");
+  const right=document.getElementById("rtRight");
+
+  if(TRANSFER&&TRANSFER.loading){
+    desc.innerHTML=`<span class="ld"></span>正在<b>实时抓取</b>经 `+
+      `<b>${TRANSFER.via}</b> 中转的两段车次…（约 5–10 秒）`;
+    right.innerHTML="";
+    return;
+  }
+  if(TRANSFER&&TRANSFER.data){
+    const d=TRANSFER.data, legs=d.legs;
+    desc.innerHTML=
+      `中转模式：经 <b>${TRANSFER.via}</b>　`+
+      legs.map((l,i)=>`第${i+1}程 <b>${l.from}→${l.to}</b> ${l.trains.length} 趟`)
+          .join("　·　")+
+      `　<span class="muted">原有线路已隐藏 · 每程按起终点直线绘制</span>　`+
+      `<span id="tCount">${tCountHTML()}</span>`;
+    right.innerHTML=
+      `<span class="muted">数据时间 <b>${d.captured_at||"—"}</b>`+
+      `${TRANSFER.cached?"（缓存）":"（本次实时）"}</span>`+
+      `<button id="tExit">退出中转</button>`;
+    document.getElementById("tExit").addEventListener("click",exitTransfer);
+    return;
+  }
+  if(VIA){
+    desc.innerHTML=`已选中 <b>${VIA}</b>　点「<b>刷新数据</b>」即实时抓取经此站中转的两程车次`;
+    right.innerHTML=`<button id="tClear">取消选中</button>`;
+    document.getElementById("tClear").addEventListener("click",()=>{
+      VIA=null; renderRouteLine(); drawChart();
+    });
+    return;
+  }
+  desc.textContent=ROUTE_DESC[curRoute]||"";
+  right.innerHTML="";
+}
+function selectTab(r){
+  if(r!==curRoute){
+    selected.clear();
+    /* 切通道 = 换一整套车站轴，中转行号会失效，直接退出中转 */
+    if(TRANSFER){ TRANSFER=null; leaveOnlyTick(); renderRouteLine(); }
+  }
+  curRoute=r;
+  ZVIEW=null;                      // 换通道 = 换轴，缩放窗口一并重置
+  document.querySelectorAll("#tabs .tab").forEach(z=>z.classList.toggle("on",z.dataset.r===r));
+  computeAxis(); renderRouteLine(); drawChart();
+  if(query) onQuery();     // 保持搜索：刷新命中数提示、唯一命中自动选中
+}
+function renderAll(){
+  renderSnap(); syncDate(); renderSortBtn();
+  renderLegend(); renderSeats(); renderTabs();
+  const h=decodeURIComponent((location.hash||"").replace("#",""));
+  selectTab(ROUTES.indexOf(h)>=0?h:"京沪通道");
+}
+
+/* 车型按钮：点单个 = 切换；点「全部」= 全选 / 全不选 之间切换。
+   中转模式下 leg=1/2 各自独立，所以筛第1程不影响第2程。 */
+document.getElementById("typegrp").addEventListener("click",e=>{
+  const b=e.target.closest("button");
+  if(!b) return;
+  const leg=+b.dataset.leg;
+  const inTr=!!(TRANSFER&&TRANSFER.data);
+  const cur=inTr?legFilter(leg):typeSel;
+  if(b.dataset.tall!==undefined){
+    const keys=typesOf(leg);
+    const allOn=keys.length>0&&keys.every(k=>cur.has(k));
+    const next=allOn?new Set():new Set(keys);       // 已全选 → 清空；否则 → 全选
+    if(inTr) TRANSFER.tf[leg]=next; else typeSel=next;
+  }else if(b.dataset.ty){
+    if(cur.has(b.dataset.ty)) cur.delete(b.dataset.ty);
+    else cur.add(b.dataset.ty);
+  }else return;
+  renderTypes();
+  apply();
+});
+/* 排序不再单独占一行：由表头「起价」按钮驱动（见 renderSortBtn） */
+document.querySelectorAll("button.f[data-d]").forEach(b=>{
+  b.addEventListener("click",()=>{
+    document.querySelectorAll("button.f[data-d]").forEach(z=>z.classList.remove("on"));
+    b.classList.add("on"); density=b.dataset.d;      // all | main | hub
+    computeAxis(); renderRouteLine();
+    /* 中转项的取点依赖 CUR_AXIS，密度一变就得重算；
+       若中转站被筛掉了（如切到「枢纽站」）则直接退出中转 */
+    if(TRANSFER){
+      TRANSFER.items=null;
+      TRANSFER.row=CUR_AXIS.indexOf(TRANSFER.via);
+      if(TRANSFER.row<0){ TRANSFER=null; selected.clear(); leaveOnlyTick(); }
+      renderRouteLine();
+    }
+    drawChart();
+  });
+});
+document.getElementById("onlyTicket").addEventListener("change",e=>{onlyTick=e.target.checked;apply();});
+document.getElementById("hiTicket").addEventListener("change",e=>{hiTick=e.target.checked;apply();});
+document.getElementById("showLbl").addEventListener("change",e=>{lblAll=e.target.checked;apply();});
+
+/* 表头「起价」= 排序按钮（12306 那种）：点一下按有售票价排，再点回发车时间 */
+function renderSortBtn(){
+  const b=document.getElementById("sortPrice");
+  const on=sortBy==="price";
+  b.classList.toggle("on",on);
+  b.textContent=on?"起价 ↑":"起价";
+  b.title=on?"当前按「有售票价」升序 · 再点一下恢复按发车时间"
+            :"点一下按「有售票价」升序（无票的排最后）";
+}
+document.getElementById("sortPrice").addEventListener("click",()=>{
+  sortBy=(sortBy==="price")?"dep":"price";
+  renderSortBtn(); apply();
+});
+
+/* ---------- 席别筛选 ---------- */
+/* 席别变化会改变每趟车的「最低可购席别 / 起价 / 是否有票」，
+   因此必须重建 TRAINS 并重绘整图（否则 lineEls 里仍指向旧对象） */
+function refreshAfterSeat(){
+  buildTrains();
+  /* 最低可购席别变了 → 中转项里的 best/minP/saleP 也要重算 */
+  if(TRANSFER) TRANSFER.items=null;
+  renderRouteLine(); renderLegend(); renderSeats();
+  drawChart();                     // 末尾会调用 apply()，带上明细表与选中态
+}
+document.getElementById("seatgrp").addEventListener("click",e=>{
+  const b=e.target.closest("button");
+  if(!b) return;
+  if(b.dataset.seatDef){ seatSel=new Set(SEAT_DEFAULT); }
+  else if(b.dataset.seatAll){ seatSel=new Set(seatKeys()); }
+  else if(b.dataset.seatNone){ seatSel=new Set(); }
+  else if(b.dataset.seat){
+    const k=b.dataset.seat;
+    if(seatSel.has(k)) seatSel.delete(k); else seatSel.add(k);
+  }else return;
+  refreshAfterSeat();
+});
+
+/* ---------- 搜索车次 ---------- */
+const qbox=document.getElementById("qbox"), qhint=document.getElementById("qhint");
+function qHits(r){
+  /* 中转模式下没有通道概念，直接在「两程全部车次」里筛 */
+  if(TRANSFER) return routeTrains().filter(visible);
+  return TRAINS.filter(t=>t.route===r&&visible(t));
+}
+function onQuery(){
+  query=qNorm(qbox.value);
+  if(!query){
+    qhint.innerHTML=""; selected.clear(); apply(); return;
+  }
+  const here=qHits(curRoute);
+  /* 唯一命中 → 自动勾选，直接显示该车各站时刻 */
+  selected=(here.length===1)?new Set([fkey(here[0])]):new Set();
+
+  if(TRANSFER){
+    qhint.innerHTML=here.length?`命中 <b>${here.length}</b> 趟`
+      :`<span style="color:#A32D2D">两程里没有此车次</span>`;
+    apply(); return;
+  }
+
+  const counts={};
+  ROUTES.forEach(r=>{const n=qHits(r).length; if(n) counts[r]=n;});
+  const others=Object.keys(counts).filter(r=>r!==curRoute);
+  if(here.length){
+    qhint.innerHTML=`本通道命中 <b>${here.length}</b> 趟`;
+  }else if(others.length){
+    qhint.innerHTML="本通道无，"+
+      others.map(r=>`<button data-go="${r}">${r} ${counts[r]} 趟 →</button>`).join("");
+  }else{
+    qhint.innerHTML=`<span style="color:#A32D2D">全线路均无此车次</span>`;
+  }
+  apply();
+}
+qbox.addEventListener("input",onQuery);
+qhint.addEventListener("click",e=>{
+  const b=e.target.closest("button[data-go]");
+  if(b) selectTab(b.dataset.go);          // selectTab 内部会重跑 onQuery
+});
+qbox.addEventListener("keydown",e=>{
+  if(e.key!=="Enter") return;
+  const all=TRAINS.filter(t=>visible(t));
+  if(all.length===1){                      // 全线路唯一 → 直接勾选并滚动到明细行
+    const t=all[0];
+    if(t.route!==curRoute) selectTab(t.route);
+    selected=new Set([fkey(t)]); apply();
+    const r=document.getElementById(rowId(t));
+    if(r) r.scrollIntoView({block:"center",behavior:"smooth"});
+  }
+});
+
+/* ---------- 表格勾选（多选；点行任意处或勾选框均可）---------- */
+document.getElementById("tbody").addEventListener("click",e=>{
+  const row=e.target.closest("tr");
+  if(!row||!row.dataset.key) return;
+  const key=row.dataset.key;
+  if(e.target.matches("input.pick")){
+    /* 复选框的 checked 在 click 之前已切换，这里直接采信 */
+    if(e.target.checked) selected.add(key); else selected.delete(key);
+  }else{
+    toggleSel(key);
+  }
+  apply();
+});
+
+/* 表头全选 / 全不选 —— 只作用于「当前列表」（受筛选与搜索影响） */
+document.getElementById("pickAll").addEventListener("click",()=>{
+  const list=sortedVisible();
+  /* 必须用 fkey(t)：中转项的键是 "L1|车次|时刻"，写成 code+"|"+dep 在
+     中转模式下会全部对不上，表头全选点了没反应（曾经的真 bug） */
+  const allOn=list.length>0&&list.every(t=>selected.has(fkey(t)));
+  list.forEach(t=>{
+    const k=fkey(t);
+    if(allOn) selected.delete(k); else selected.add(k);
+  });
+  apply();
+});
+window.addEventListener("hashchange",()=>{
+  const h=decodeURIComponent((location.hash||"").replace("#",""));
+  if(ROUTES.indexOf(h)>=0) selectTab(h);
+});
+
+const btnRf=document.getElementById("btnRefresh");
+const rfmsg=document.getElementById("rfmsg");
+const logbox=document.getElementById("logbox");
+const logtog=document.getElementById("logtog");
+
+function setMsg(t,cls){rfmsg.className="rfmsg"+(cls?" "+cls:"");rfmsg.textContent=t;}
+
+/* 刷新日志默认折叠，由「日志」按钮切换；内容只在展开时才有意义 */
+let logOpen=false;
+logtog.addEventListener("click",()=>{
+  logOpen=!logOpen;
+  logbox.classList.toggle("open",logOpen);
+  logtog.textContent=logOpen?"日志 ▴":"日志 ▾";
+  if(logOpen&&!logbox.textContent.trim()){
+    logbox.textContent="（暂无日志，点「刷新数据」后这里会显示抓取过程）";
+  }
+});
+function showLog(lines){
+  logbox.textContent=(lines||[]).slice(-40).join("\n");
+  logbox.scrollTop=logbox.scrollHeight;
+}
+
+/* 数据快照时间（余票快照优先，取不到则退回票价抓取时间） */
+function renderSnap(){
+  const m=DATA.meta||{};
+  const t=String(m.live_captured||m.price_captured||"").trim();
+  const el=document.getElementById("snap");
+  const mm=t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  el.textContent=mm?`数据快照 ${mm[2]}-${mm[3]} ${mm[4]}:${mm[5]}`
+                   :`数据快照 ${t||"—"}`;
+  el.title=`余票快照 ${m.live_captured||"—"}；票价抓取 ${m.price_captured||"—"}`;
+}
+
+/* ---------- 乘车日期 ---------- */
+const datebox=document.getElementById("datebox"), datehint=document.getElementById("datehint");
+function syncDate(){
+  const d=(DATA.meta||{}).travel_date||"";
+  if(d) datebox.value=d;
+  const n=new Date(), p=v=>String(v).padStart(2,"0");
+  datebox.min=`${n.getFullYear()}-${p(n.getMonth()+1)}-${p(n.getDate())}`;
+  datehint.innerHTML=CAN_API
+    ? "改动日期会按新日期重新抓取（12306 预售期内）"
+    : `<span style="color:#BA7517">离线打开，改日期需先双击 启动.bat</span>`;
+}
+datebox.addEventListener("change",()=>{
+  const v=datebox.value;
+  if(!v) return;
+  if(!CAN_API){
+    setMsg("改乘车日期需通过本地服务打开：请先双击 启动.bat","warn");
+    syncDate();
+    return;
+  }
+  if(v===((DATA.meta||{}).travel_date||"")) return;
+  startRefresh(v);
+});
+
+async function startRefresh(dt){
+  const date=dt||datebox.value||(DATA.meta&&DATA.meta.travel_date)||"";
+
+  /* 选中了中转站 → 刷新按钮改为「查该站中转」，取数统一由这里触发 */
+  if(VIA){
+    if(!CAN_API){ setMsg("中转查询需要本地服务，请先双击「启动.bat」","err"); return; }
+    setMsg(`正在实时抓取经 ${VIA} 中转的两段车次，请稍候…（约 5–10 秒）`);
+    btnRf.classList.add("busy"); btnRf.disabled=true;
+    await loadTransfer(VIA);
+    btnRf.classList.remove("busy"); btnRf.disabled=false;
+    if(TRANSFER&&TRANSFER.data){
+      const l=TRANSFER.data.legs;
+      setMsg(`中转查询完成 ✓（第1程 ${l[0].trains.length} 趟 · 第2程 ${l[1].trains.length} 趟）`,"ok");
+    }else{
+      setMsg("中转查询未成功，详见路由条上的提示","warn");
+    }
+    return;
+  }
+
+  setMsg(`正在按 ${date} 刷新，请稍候…`);
+  try{
+    const r=await fetch("/api/refresh?date="+encodeURIComponent(date));
+    const j=await r.json();
+    if(!j.started&&j.running) setMsg("已有刷新任务在执行中","warn");
+    pollStatus();
+  }catch(e){
+    setMsg("无法连接本地服务："+e.message,"err");
+    btnRf.disabled=false; btnRf.classList.remove("busy");
+  }
+}
+
+async function pollStatus(){
+  try{
+    const j=await (await fetch("/api/status")).json();
+    showLog(j.log);
+    if(j.running){
+      btnRf.classList.add("busy"); btnRf.disabled=true;
+      setMsg("刷新中…");
+      setTimeout(pollStatus,1200);
+      return;
+    }
+    btnRf.classList.remove("busy"); btnRf.disabled=false;
+    const rep=j.report||{};
+    const failed=(rep.steps||[]).filter(s=>!s.ok);
+    const SRC={mcp:"mcp-server-12306",urllib:"内置直连"};
+    const srcTxt=rep.source_used?`（数据源 ${SRC[rep.source_used]||rep.source_used}）`:"";
+    if(rep.ok===false||failed.length){
+      setMsg("刷新完成，但部分步骤未成功（详见日志）"+srcTxt,"warn");
+    }else{
+      setMsg("刷新完成 ✓  "+srcTxt,"ok");
+    }
+    await reloadData();
+  }catch(e){
+    btnRf.classList.remove("busy"); btnRf.disabled=false;
+    setMsg("状态查询失败："+e.message,"err");
+  }
+}
+
+async function reloadData(){
+  try{
+    const d=await (await fetch("/api/data")).json();
+    if(!d||!d.trains) return;
+    DATA.meta=d.meta; DATA.axes=d.axes; DATA.freq=d.freq||{};
+    DATA.rowst=d.rowst||{}; DATA.trains=d.trains;
+    /* 数据换了，中转结果也不再对应当前快照 → 退出中转 */
+    if(TRANSFER){ TRANSFER=null; selected.clear(); leaveOnlyTick(); renderRouteLine(); }
+    buildTrains(); renderAll(); renderNote();
+  }catch(e){ setMsg("数据加载失败："+e.message,"err"); }
+}
+
+btnRf.addEventListener("click",()=>{
+  if(!CAN_API){
+    setMsg("刷新需通过本地服务打开：请先运行 python scripts/server.py，再访问 http://127.0.0.1:8765/","warn");
+    return;
+  }
+  btnRf.classList.add("busy"); btnRf.disabled=true;
+  startRefresh();
+});
+
+function renderNote(){
+  const m=DATA.meta||{};
+  document.getElementById("note").innerHTML=`
+    <b>数据来源与口径</b><br>
+    · <b>数据来源</b>：由 <code>mcp-server-12306</code>（drfccv，MIT）聚合 12306 官方接口；若该服务不可用会自动回退到内置直连，刷新结果里会标明实际用的是哪套。<br>
+    · <b>经停站</b>：来自 12306 <code>czxx/queryByTrainNo</code> 接口，全部为<b>实测真实经停</b>；<b>画图用的车站轴</b>已统一到城市级（郑州东/郑州航空港 → 郑州，常州北/金坛 → 常州，南京南 → 南京，镇江南 → 镇江）。<br>
+    · <b>起终站列</b>：表格中原样列出该趟车的<b>实测出发 / 到达站</b>（如 <code>郑州东→常州北</code>），不做归并 —— 同名车次的多趟（如 G1950 在郑州、郑州东各有一趟）就靠这一列区分。<br>
+    · <b>票价</b>：来自 12306 <code>leftTicketPrice</code> 接口，抓取于 <b>${m.price_captured||"—"}</b>。<br>
+    · <b>余票</b>：来自 <code>leftTicket/query</code> 接口，快照时间 <b>${m.live_captured||"—"}</b>；标注「余票未知」表示该接口未覆盖该席别。<br>
+    · <b>纵轴</b>：每个通道的车站由<b>该通道每趟车的实测经停各自推导</b>（拓扑排序），所以三条通道的站点集合各不相同；按经由顺序等距排布，不严格对应实际里程。路由条上的「车站」可切换：<b>全部站</b>／<b>主要站</b>（人工挑选的干线站 + 首末站）／<b>枢纽站</b>（停靠车次 ≥ 通道车次的 60%）。<br>
+    · <b>通道划分</b>：依据每趟车的实测经停自动归类 —— 经合肥者为合杭通道，经淮安/扬州者为连镇通道，其余为京沪通道。<br>
+    · <b>同城多站</b>：郑州 / 郑州东 / 郑州航空港 这类同一城市的不同车站，在纵轴上占<b>同一行</b>、按时刻<b>左右分开</b>画出各自的停靠点 —— 所以一趟车在同一城市停两次会看到两个点（如 G1950 的「郑州 17:48」与「郑州东 18:10」）。鼠标悬停站名可看该行包含哪些车站。<br>
+    · <b>中转查询</b>：点左侧<b>站名</b>会选中该站（站名变橙色），再点「<b>刷新数据</b>」并确认后，即<b>实时抓取</b>「郑州→该站」与「该站→常州」两程的全部车次，就地画在图上且原有线路隐藏；再点同一站名，或点路由条右侧的「退出中转」，即可恢复（也可用<b>车型栏的第1程 / 第2程</b>分别筛选两程车型）。数据时间与退出按钮显示在<b>路由条右侧</b>。车次明细表会按<b>第 1 程 / 第 2 程分成两段</b>，各带一条小标题（含该程共多少趟、当前显示多少趟），排序在每段内各自进行。<br>
+    · <b>中转站有两个车站时</b>（如徐州 / 徐州东）：同一趟车可能「到徐州东、却要从徐州出发」，所以中转行会按<b>实际车站</b>用不同的点区分 —— <b>● 实心圆</b> 与 <b>○ 空心圆</b>，行内右上角有对应图例；选中该车时，各站时刻也会带上站名（如「徐州东 05:47」）。该行只涉及一个车站时，全部用默认的实心圆。<br>
+    · <b>进入中转会自动勾选「仅看有票」</b>（退出时还原成原来的状态），路由条上显示「仅看有票：显示 N / M 趟」。两程只取票价与余票、<b>不抓经停</b>，所以每程是从起点到终点的直线，穿过中间城市并不代表停靠；中转站所在行用橙色虚线标出 <b>⟳ 中转站</b>。<br>
+    · <b>刷新数据的含义</b>：按钮永远是「要最新的」—— 直达模式下重新抓取全程车次，中转模式下<b>绕过缓存 </b>重新抓取两程（约 5–10 秒）。所以同一站反复点刷新也会重新取数。<br>
+    · <b>时间轴缩放</b>：把鼠标移到运行图下方的<b>时间轴</b>上滚动滚轮即可放大 / 缩小（以指针所指时刻为锚点；指针在可视窗之外时以窗口中心为锚点）；也可以直接<b>拖动时间轴</b> —— 拖中间平移、拖两端把手缩放、点「重置」或<b>双击时间轴</b>回到全时段。运行图本身不响应滚轮。最细可缩到半小时跨度，刻度间隔随缩放自动切换（4h → 2h → 1h → 30min → 15min）。切换通道、进出中转、刷新数据都会自动重置缩放。<br>
+    · <b>搜索车次</b>：支持完整车次（<code>G1988</code>）、纯数字（<code>1988</code>）、前缀（<code>K5</code>），即时筛选运行图与明细表；当前通道只命中一趟时自动选中并标出各站时刻；按 <code>Enter</code> 可直接定位。若当前通道无命中，会提示其余通道的命中数并可一键切过去。<br>
+    · <b>车型筛选</b>：<b>可多选</b>，按钮只列当前范围内真实出现过的车型，点「全部」一键全选。线型只分三类：<b>高铁 G</b> 实线、<b>动车 D / 城际 C</b> 虚线、<b>普速 Z / T / K / 纯数字</b> 点线。<br>
+    · <b>中转模式下按程筛选车型</b>：车型栏会变成「<b>第1程</b>」「<b>第2程</b>」两行，各自独立多选，筛其中一程不影响另一程；行尾的 <code>n/m 趟</code> 显示该程当前可见 / 总趟数。进入中转时会<b>继承</b>进入前的车型选择（若进入前是「全部」，两程也取全部）。<br>
+    · <b>勾选车次</b>：点击车次明细表最左侧的勾选框（或点整行、或直接点运行图上的线路）即可勾选，<b>支持多选</b>；被勾选的线路会加粗高亮并在各站旁标出到发时刻，其余线路淡出。表格标题会显示已勾选数量。<br>
+    · <b>标签策略</b>：只要有车次被勾选，就隐藏全部车次名标签，避免与各站时刻文字重叠。<br>
+    · <b>席别筛选</b>：默认勾选<b>二等座 + 硬卧 + 硬座</b>，可点「默认」一键恢复，或用「全选 / 清空」。<b>线条颜色</b>取<b>所选席别中等级最低且当前有票的那个</b> —— 所以「只有商务座有票」的车次会显示商务座的颜色，而不会让人误以为整趟车都能买；「有票 / 无票」判定与统计数字同样只按勾选的席别计算。淡显的席别表示未勾选，不参与判定。<br>
+    · <b>起价</b>：= 所选席别中<b>当前有票</b>的最低票价；全部都无票时显示 <code>--</code>（悬停可看该车所选席别的最低价）。点表头的「起价」即按此价升序排列，无票的排最后，再点一下恢复按发车时间。<br>
+    · <b>高亮有票</b>：等同于把这些有票车次在表格里<b>全部勾选</b> —— 加粗、沿线标出各站时刻、其余淡出（不过滤掉）。若已手动勾选了车次，则以手动勾选为准。<br>
+    · <b>乘车日期</b>：改动顶部的日期会按新日期重新抓取（12306 预售期内）；表头最左的勾选框可对<b>当前列表</b>全选 / 全不选。<br>
+    · 折线在经过但未停靠的城市处直接穿过，符合列车运行图惯例。<br>
+    · 本原型仅供个人学习研究，实时购票请以 12306 官方为准。<br>
+    <span style="color:#b4b2a9">注：12306 余票接口对高频请求有长时间限流。点击「刷新数据」会通过本地服务重新抓取；若被限流会自动沿用上次快照并提示。</span>`;
+}
+
+async function boot(){
+  if(CAN_API){
+    try{
+      const d=await (await fetch("/api/data")).json();
+      if(d&&d.trains&&d.trains.length){DATA.meta=d.meta;DATA.axes=d.axes;DATA.freq=d.freq||{};DATA.rowst=d.rowst||{};DATA.trains=d.trains;}
+      setMsg("已连接本地服务");
+    }catch(e){
+      setMsg("本地服务未响应，使用页面内置数据","warn");
+    }
+    fetch("/api/status").then(r=>r.json()).then(j=>{
+      if(j.running) pollStatus();
+    }).catch(()=>{});
+  }else{
+    setMsg("当前为离线打开（file://），数据为内置快照","");
+  }
+  buildTrains(); renderAll(); renderNote();
+}
+boot();
+</script>
+</body>
+</html>
