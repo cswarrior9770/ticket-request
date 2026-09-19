@@ -1,4 +1,6 @@
 # 12306 车次运行图原型（郑州 → 常州）
+<img width="2560" height="1304" alt="image" src="https://github.com/user-attachments/assets/ef26b568-0301-4b92-abbe-f62b70e50a4b" />
+<img width="2560" height="1304" alt="image" src="https://github.com/user-attachments/assets/7d8e6d31-afbc-4f6d-a227-4c72de4d7a47" />
 
 一个**零第三方依赖**的本地工具：把 12306 某条线路的列车时刻，画成一张可视化的「运行图」，
 支持按车型筛选、余票/席别、以及「经某站中转」的两程联程查询。
