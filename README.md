@@ -1,6 +1,6 @@
 # 12306 列车运行图 · 任意区间查询
-<img width="2560" height="1304" alt="image" src="https://github.com/user-attachments/assets/ef26b568-0301-4b92-abbe-f62b70e50a4b" />
-<img width="2560" height="1304" alt="image" src="https://github.com/user-attachments/assets/7d8e6d31-afbc-4f6d-a227-4c72de4d7a47" />
+![Uploading image.png…]()
+
 
 **输入任意两个车站（或城市），自动抓取该区间的全部车次，画成一张可视化的「运行图」。**
 
