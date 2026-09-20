@@ -59,7 +59,8 @@ def _throttle(last, interval):
 
 # ---------------- 票价 + 席别编组 ----------------
 
-def load_price(client, from_station, to_station, date, log=print, save=True):
+def load_price(client, from_station, to_station, date, log=print, save=True,
+               save_path=None):
     log("MCP query-ticket-price …")
     r = client.call_json("query-ticket-price", {
         "from_station": from_station, "to_station": to_station,
@@ -87,9 +88,11 @@ def load_price(client, from_station, to_station, date, log=print, save=True):
     payload = {"source": "mcp", "from_station": from_station,
                "to_station": to_station, "train_date": date, "data": out}
     # ⚠️ save=False 用于「中转查询」等旁路取数：绝不能覆盖主数据集缓存
+    #    save_path 由调用方按「当前路线」给出（自定义起终点时各自一份缓存）
     if save:
-        os.makedirs(DATA, exist_ok=True)
-        with open(os.path.join(DATA, "price_raw.json"), "w", encoding="utf-8") as f:
+        p = save_path or os.path.join(DATA, "price_raw.json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
     return payload
 
@@ -98,6 +101,12 @@ def load_price(client, from_station, to_station, date, log=print, save=True):
 
 def load_stops(client, price, date, interval=3.5, log=print,
                cache_path=None, force=False):
+    """⚠️ 已弃用（2026-09-20）：经停抓取现在一律直连，见 `pipeline.fetch_stop_batch`。
+
+    保留只为兼容旧调用。走 MCP 的 `get-train-route-stations` 会先把「车次号」
+    解析成内部列车编号（那次 leftTicket 请求），而票价载荷里本来就有 `train_no`，
+    等于白白多一倍请求、单趟 1.2 秒 vs 直连 0.25 秒。
+    """
     out_path = cache_path or os.path.join(DATA, "stops.json")
     done = {}
     if os.path.exists(out_path) and not force:
@@ -145,7 +154,8 @@ def load_stops(client, price, date, interval=3.5, log=print,
 
 # ---------------- 实时余票 ----------------
 
-def load_live(client, from_station, to_station, date, log=print, save=True):
+def load_live(client, from_station, to_station, date, log=print, save=True,
+              save_path=None):
     log("MCP query-tickets …")
     r = client.call_json("query-tickets", {
         "from_station": from_station, "to_station": to_station,
@@ -168,9 +178,11 @@ def load_live(client, from_station, to_station, date, log=print, save=True):
                "date": date, "trains": snap}
     # ⚠️ save=False 用于「中转查询」等旁路取数：
     #    否则会把别的区间的余票写进主快照，整张图的数据就串了
+    #    save_path 由调用方按「当前路线」给出（自定义起终点时各自一份缓存）
     if save:
-        os.makedirs(DATA, exist_ok=True)
-        with open(os.path.join(DATA, "live_snapshot.json"), "w", encoding="utf-8") as f:
+        p = save_path or os.path.join(DATA, "live_snapshot.json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
     log(f"MCP 余票：{len(snap)} 趟")
     return payload

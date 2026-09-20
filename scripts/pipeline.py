@@ -12,8 +12,11 @@ import json
 import os
 import re
 import ssl
+import threading
 import time
 import urllib.request
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(BASE, "data")
@@ -47,36 +50,154 @@ SEAT_MAP = [
     ("yz", "yz", "硬座", 1), ("wz", "wz", "无座", 0),
 ]
 
-CITY_FIX = {
-    "郑州东": "郑州", "郑州航空港": "郑州", "常州北": "常州", "金坛": "常州",
-    "开封北": "开封", "兰考南": "兰考", "民权北": "民权", "徐州东": "徐州",
-    "宿州东": "宿州", "蚌埠南": "蚌埠", "滁州北": "滁州", "南京南": "南京",
-    "镇江南": "镇江", "丹阳北": "丹阳", "大港南": "镇江", "合肥北城": "合肥",
-    "淮南南": "淮南", "阜阳西": "阜阳", "太和东": "太和", "颍上北": "颍上",
-    "亳州南": "亳州", "扬州东": "扬州", "淮安东": "淮安", "萧县北": "萧县",
-    "永城北": "永城", "砀山南": "砀山", "洛阳龙门": "洛阳", "渭南北": "渭南",
-    "西安北": "西安", "无锡东": "无锡", "苏州北": "苏州", "昆山南": "昆山",
-    "上海虹桥": "上海", "合肥西": "合肥",
-}
+# ---------------- 车站表：「站名 → 城市」不再手写 ----------------
+# 12306 官方 station_name.js 的每行其实有 11 个字段：
+#     @简拼|站名|三字码|拼音|简拼|编号|区域码|城市|||
+# 旧版正则只取了前两个字段，所以「站名 → 城市」只能靠手写字典（CITY_FIX），
+# 一换路线（上海→杭州）就失效。现在直接解析官方「城市」字段，3389 站全覆盖：
+#     武进 / 戚墅堰 / 金坛 → 常州      大港南 / 丹阳北 → 镇江
+#     桐乡 / 海宁西 / 嘉兴南 → 嘉兴      上海松江 / 南翔北 → 上海
+STATION_JS = "https://kyfw.12306.cn/otn/resources/js/framework/station_name.js"
+STATION_TABLE = os.path.join(DATA, "stations_city.json")
 
-AXES = {
-    "京沪通道": ["郑州", "开封", "兰考", "民权", "宁陵县", "商丘", "砀山",
-               "永城", "徐州", "宿州", "蚌埠", "滁州", "南京", "镇江", "常州"],
-    "合杭通道": ["郑州", "商丘", "阜阳", "寿县", "淮南", "合肥", "南京",
-               "镇江", "常州"],
-    "连镇通道": ["郑州", "商丘", "徐州", "宿迁", "淮安", "扬州", "镇江",
-               "丹阳", "常州"],
-}
-FROM_ST = {"郑州", "郑州东", "郑州航空港", "焦作"}
+_CODE_OF = {}         # 站名 -> 电报码
+_CITY_OF = {}         # 站名 -> 官方城市
+_CITY_MEMBERS = {}    # 官方城市 -> [该城市的全部站名]
+_BY2 = {}             # 站名前两字 -> 同前缀候选站名（按长度降序，供 norm() 第 3 条规则用）
+
+FROM_ST = {"郑州", "郑州东", "郑州航空港"}
 TO_ST = {"常州", "常州北", "金坛"}
+DEFAULT_PAIR = ("郑州", "常州")
+
+
+def city_of(name):
+    """站名 -> 官方城市（查不到就返回站名本身）"""
+    if not _CITY_OF:
+        fetch_stations()
+    return _CITY_OF.get(name) or name
+
+
+def _prefix_candidates(name):
+    """有可能成为 `name` 前缀的官方站名（只查前两字相同的，避免全表 3389 次扫描）"""
+    if not _CITY_OF:
+        fetch_stations()
+    return _BY2.get(name[:2]) or ()
+
+
+def city_members(city):
+    """官方「同一座城市」的全部车站（含同名站）"""
+    if not _CITY_OF:
+        fetch_stations()
+    return set(_CITY_MEMBERS.get(city) or ()) | {city}
+
+
+def same_city(name, stations=None):
+    """该城市的「同城核心站」：城市名本身 + 官方同城里以城市名开头的站。
+
+    用来做 `build()` 里区段端点的**兜底**匹配，所以要克制 ——
+    官方城市字段是**地级市**口径，郑州名下还挂着 巩义 / 巩义南 / 新郑机场，
+    把它们都当端点候选会切错区段。真正需要「同城多站」覆盖的场景
+    （上海南 / 上海松江 / 上海虹桥）都是同名前缀，够用。
+    """
+    if not _CITY_OF:
+        fetch_stations()
+    out = {name}
+    out |= {s for s in _CITY_MEMBERS.get(name) or () if s != name and s.startswith(name)}
+    for s in (stations or ()):
+        if s != name and s.startswith(name):
+            out.add(s)
+    return out
+
+
+def set_route(fr=None, to=None, log=print):
+    """切换始发 / 终到站，参数可以是车站名或城市名（郑州东 / 郑州）。
+
+    一律**按城市**解析电报码：12306 传城市码时会把同城各站（郑州 / 郑州东 /
+    郑州航空港）的车次一并返回，覆盖面比单站更全；轴上的行名、中转端点
+    也统一用城市名，同城多站按时刻左右分开画点。
+
+    归并规则只认「站名以官方城市名开头」这一种（上海虹桥 → 上海、郑州东 → 郑州），
+    绝不把 义乌 之类解析成它的地级市（金华）—— 用户点名要哪个站就查哪个站。
+    """
+    global FROM_NAME, TO_NAME, FROM_CODE, TO_CODE, FROM_ST, TO_ST
+    st = fetch_stations()
+
+    def resolve(x, dflt):
+        x = (x or "").strip() or dflt
+        city = x if x not in st else x
+        c = city_of(x)
+        if c != x and x.startswith(c):      # 郑州东 → 郑州（同城市名开头才归并）
+            city = c
+        code = st.get(city)
+        if not code:
+            raise ValueError(f"未知车站或城市：{x}")
+        return city, code
+
+    fcity, fcode = resolve(fr, DEFAULT_PAIR[0])
+    tcity, tcode = resolve(to, DEFAULT_PAIR[1])
+    if fcity == tcity:
+        raise ValueError(f"始发站与终到站不能是同一座城市（{fcity}）")
+    FROM_NAME, FROM_CODE = fcity, fcode
+    TO_NAME, TO_CODE = tcity, tcode
+    FROM_ST = same_city(fcity, st)
+    TO_ST = same_city(tcity, st)
+    log(f"路线：{FROM_NAME}({FROM_CODE}) → {TO_NAME}({TO_CODE})")
+    return FROM_NAME, TO_NAME
+
+
+def _cache_paths():
+    """主数据集缓存路径。
+
+    默认路线（郑州→常州）沿用 data/ 根目录下的原有缓存，
+    免得升级后还要重新抓一遍；其余路线各自放在 data/routes/<起>_<终>/。
+    经停站缓存（stops.json）是「按车次」的，与路线无关，所以全局共用。
+    """
+    if (FROM_NAME, TO_NAME) == DEFAULT_PAIR:
+        return (os.path.join(DATA, "price_raw.json"),
+                os.path.join(DATA, "live_snapshot.json"))
+    d = os.path.join(DATA, "routes", f"{FROM_NAME}_{TO_NAME}")
+    os.makedirs(d, exist_ok=True)
+    return (os.path.join(d, "price_raw.json"),
+            os.path.join(d, "live_snapshot.json"))
 
 
 class RateLimited(Exception):
     """被 12306 风控拦截（返回 HTML 而非 JSON）"""
 
 
-def norm(n):
-    return CITY_FIX.get(n, n)
+def norm(n, frm=None, to=None):
+    """站名 → 城市行名（全部来自官方数据，不再有手写字典）
+
+    三条规则，依次判定：
+      1. **路线端点必并**：官方城市 == 本路线起点 / 终点城市的站，一律归到端点城市
+         （武进 / 戚墅堰 / 金坛 → 常州、上海松江 → 上海）。这一条不能省 ——
+         漏了它们会自成一「行」，被密度筛掉后停靠点画不出来（G7155 武进→上海松江
+         就是这么把起点丢掉的）。
+      2. **同名城市前缀**：站名以官方城市名开头 → 归到该城市
+         （郑州东→郑州、上海虹桥→上海、嘉兴南→嘉兴、黄山北→黄山）。
+      3. **同城站名前缀**：官方站名里存在「与本站同城、且是本站名前缀」的站 →
+         归到那个站（兰考南→兰考、民权北→民权、砀山南→砀山、周口东→周口）。
+         这一条保住了「县级站自成一行」的现有观感：兰考南 归 兰考 而不是 开封。
+      3b. **方位后缀**：站名以 东/南/西/北 结尾、且去掉末字后的基名**不是**官方站名时，
+         用基名当行名（永城北→永城、太和东→太和、黟县东→黟县）。
+         有些高铁站只有「XX北/XX东」一个站（永城、太和 都没有同名老站），
+         不这么办它们会各自孤立成行，跟 砀山南→砀山 的观感对不上。
+         基名要求 ≥2 字，所以 南京 / 南宁 / 北京 / 西安 这类不会被误剥。
+      4. 其余自成一行（大港南→大港、桐乡、巩义…）。
+    """
+    if frm and (n == frm or city_of(n) == frm):
+        return frm
+    if to and (n == to or city_of(n) == to):
+        return to
+    c = city_of(n)
+    if c != n and n.startswith(c):
+        return c
+    for s in _prefix_candidates(n):
+        if s != n and n.startswith(s) and _CITY_OF.get(s) == c:
+            return s
+    if len(n) > 2 and n[-1] in "东南西北" and n[:-1] not in _CITY_OF:
+        return n[:-1]
+    return n
 
 
 def throttle(interval):
@@ -106,18 +227,47 @@ def http_json(url, **kw):
 
 # ---------------- 各步骤 ----------------
 
-def fetch_stations(interval=2.0):
-    """站点字典（本地缓存）"""
-    p = os.path.join(DATA, "stations.json")
-    if os.path.exists(p):
-        return json.load(open(p, encoding="utf-8"))
-    txt = http_text(
-        "https://kyfw.12306.cn/otn/resources/js/framework/station_name.js",
-        interval=interval)
-    st = dict(re.findall(r"@[a-z]+\|([\u4e00-\u9fa5]+)\|([A-Z]+)\|", txt))
-    os.makedirs(DATA, exist_ok=True)
-    json.dump(st, open(p, "w", encoding="utf-8"), ensure_ascii=False)
-    return st
+def fetch_stations(interval=2.0, force=False):
+    """站点字典 {站名: 电报码}，同时把「站名 → 城市」一并建好（本地缓存）。
+
+    缓存 `data/stations_city.json` 存官方全字段；旧的 `data/stations.json`（只有站名+码）
+    同时重新生成，保证历史脚本（audit_data 等）继续可用。
+    """
+    global _CODE_OF, _CITY_OF, _CITY_MEMBERS, _BY2
+    if _CODE_OF and not force:
+        return _CODE_OF
+    raw = {}
+    if os.path.exists(STATION_TABLE) and not force:
+        with open(STATION_TABLE, encoding="utf-8") as f:
+            raw = json.load(f)
+    if not raw:
+        txt = http_text(STATION_JS, interval=interval)
+        for rec in txt.split("@"):
+            f = rec.split("|")
+            if len(f) < 8:                # 官方文件是 11 段；老格式只有 6 段
+                continue
+            name, code, city = f[1].strip(), f[2].strip(), f[7].strip()
+            if not name or not code:
+                continue
+            raw[name] = [code, city, f[6].strip()]
+        if len(raw) < 1000:
+            raise RuntimeError(f"车站表解析异常，只得到 {len(raw)} 条")
+        os.makedirs(DATA, exist_ok=True)
+        with open(STATION_TABLE, "w", encoding="utf-8") as f:
+            json.dump(raw, f, ensure_ascii=False, separators=(",", ":"))
+        with open(os.path.join(DATA, "stations.json"), "w", encoding="utf-8") as f:
+            json.dump({n: v[0] for n, v in raw.items()}, f, ensure_ascii=False)
+    _CODE_OF = {n: v[0] for n, v in raw.items()}
+    _CITY_OF = {n: (v[1] or n) for n, v in raw.items()}
+    _CITY_MEMBERS = {}
+    for n, c in _CITY_OF.items():
+        _CITY_MEMBERS.setdefault(c, []).append(n)
+    _BY2 = {}
+    for n in _CITY_OF:
+        _BY2.setdefault(n[:2], []).append(n)
+    for v in _BY2.values():
+        v.sort(key=len, reverse=True)
+    return _CODE_OF
 
 
 def fetch_price(date=DEFAULT_DATE, interval=3.0,
@@ -138,57 +288,127 @@ def fetch_price(date=DEFAULT_DATE, interval=3.0,
         raise RuntimeError("票价接口返回空")
     if save:
         os.makedirs(DATA, exist_ok=True)
-        json.dump(j, open(os.path.join(DATA, "price_raw.json"), "w", encoding="utf-8"),
+        json.dump(j, open(_cache_paths()[0], "w", encoding="utf-8"),
                   ensure_ascii=False)
     return j
 
 
-def fetch_stops(date=DEFAULT_DATE, interval=3.5, price=None, log=print):
-    """车次经停站，增量抓取（已有缓存则跳过）"""
-    price = price or json.load(open(os.path.join(DATA, "price_raw.json"),
-                                    encoding="utf-8"))
-    out = os.path.join(DATA, "stops.json")
-    done = json.load(open(out, encoding="utf-8")) if os.path.exists(out) else {}
+DEFAULT_CONC = 6          # 经停抓取并发（1 = 串行）
 
-    trains = []
-    for it in price["data"]:
-        q = it["queryLeftNewDTO"]
-        trains.append({"code": q["station_train_code"], "train_no": q["train_no"],
-                       "fc": q["from_station_telecode"],
-                       "tc": q["to_station_telecode"],
-                       "fn": q["from_station_name"], "tn": q["to_station_name"],
-                       "dep": q["start_time"], "arr": q["arrive_time"],
-                       "dur": q["lishi"]})
 
-    todo = [t for t in trains if not done.get(f"{t['code']}|{t['dep']}", {}).get("stops")]
-    log(f"经停站：共 {len(trains)} 趟，待抓 {len(todo)} 趟")
-    blocked = 0
-    for t in todo:
-        key = f"{t['code']}|{t['dep']}"
-        u = ("https://kyfw.12306.cn/otn/czxx/queryByTrainNo"
-             f"?train_no={t['train_no']}&from_station_telecode={t['fc']}"
-             f"&to_station_telecode={t['tc']}&depart_date={date}")
+def _stops_url(t, date):
+    return ("https://kyfw.12306.cn/otn/czxx/queryByTrainNo"
+            f"?train_no={t['train_no']}&from_station_telecode={t['fc']}"
+            f"&to_station_telecode={t['tc']}&depart_date={date}")
+
+
+def _stops_rows(j):
+    rows = (j.get("data") or {}).get("data") or []
+    return [{"n": r.get("station_name"), "arr": r.get("arrive_time"),
+             "dep": r.get("start_time"), "stop": r.get("stopover_time")}
+            for r in rows]
+
+
+def fetch_stop_batch(todo, date, conc=DEFAULT_CONC, interval=0.0, log=print):
+    """并发抓一批车次的经停站，返回 (got, missing)。
+
+    `todo` 每项需带 key / code / train_no / fc / tc / fn / tn / dep / arr / dur。
+
+    ⚠️ 一律**直连** `czxx/queryByTrainNo`：`train_no`（12306 内部编号）直接取自
+    票价载荷的 `queryLeftNewDTO.train_no`，一趟一个请求。而 MCP 的
+    `get-train-route-stations` 得先发一次 leftTicket 把「车次号」解析成内部编号
+    （日志里那句「检测到车次号 K1158，正在转换为列车编号…」），请求数翻倍、
+    单趟 1.2 秒 vs 直连 0.25 秒。
+
+    ⚠️ 并发是这里唯一的速度来源：旧实现串行 + 每趟强制 sleep 3.5 秒，
+    73 趟要 4 分 15 秒，而其中绝大多数是纯等待。实测 6 并发 16 趟共 1.6 秒、零限流。
+    被限流时立刻置位 stop 让其余线程收工（不硬冲），串行模式下保留 interval 节流。
+    """
+    got, missing = {}, []
+    todo = list(todo)
+    if not todo:
+        return got, missing
+    conc = max(1, int(conc or 1))
+    stop = threading.Event()
+    lock = threading.Lock()
+    last = [0.0]
+
+    def work(t):
+        if stop.is_set():
+            return
         try:
-            j = http_json(u, interval=interval)
-            rows = (j.get("data") or {}).get("data") or []
-            done[key] = {"code": t["code"], "train_no": t["train_no"],
-                         "from": t["fn"], "to": t["tn"], "dep": t["dep"],
-                         "arr": t["arr"], "dur": t["dur"],
-                         "stops": [{"n": r.get("station_name"),
-                                    "arr": r.get("arrive_time"),
-                                    "dep": r.get("start_time"),
-                                    "stop": r.get("stopover_time")} for r in rows]}
+            if conc == 1 and interval:
+                with lock:
+                    throttle(interval)
+            j = http_json(_stops_url(t, date), interval=0.0)
+            rows = _stops_rows(j)
+            if not rows:
+                with lock:
+                    missing.append(t["key"])
+                log(f"  {t['code']:<7} 返回 0 站，跳过")
+                return
+            rec = {"code": t["code"], "train_no": t["train_no"],
+                   "from": t.get("frm"), "to": t.get("to"), "dep": t.get("dep"),
+                   "arr": t.get("arr"), "dur": t.get("dur"), "stops": rows}
+            with lock:
+                got[t["key"]] = rec
             log(f"  {t['code']:<7} {len(rows):>3} 站")
-            json.dump(done, open(out, "w", encoding="utf-8"),
-                      ensure_ascii=False, indent=1)
-            blocked = 0
         except RateLimited:
-            blocked += 1
-            log(f"  {t['code']} 被限流，停止抓取")
-            if blocked >= 1:
-                break
+            stop.set()
+            with lock:
+                missing.append(t["key"])
+            log(f"  {t['code']} 被限流，停止本轮抓取")
         except Exception as e:
-            log(f"  {t['code']} 异常 {type(e).__name__}: {str(e)[:60]}")
+            with lock:
+                missing.append(t["key"])
+            log(f"  {t['code']} 失败：{type(e).__name__}: {str(e)[:60]}")
+
+    with ThreadPoolExecutor(max_workers=conc) as ex:
+        list(ex.map(work, todo))
+    return got, missing
+
+
+def _trains_from_price(price, st):
+    """票价载荷 → 抓经停用的车次项（电报码缺失时按站名反查）"""
+    out = []
+    for it in price.get("data") or []:
+        q = it.get("queryLeftNewDTO") or {}
+        code, dep = q.get("station_train_code"), q.get("start_time")
+        if not code or not dep:
+            continue
+        out.append({"key": f"{code}|{dep}", "code": code,
+                    "train_no": q.get("train_no"),
+                    "fc": q.get("from_station_telecode")
+                          or st.get(q.get("from_station_name")),
+                    "tc": q.get("to_station_telecode")
+                          or st.get(q.get("to_station_name")),
+                    "frm": q.get("from_station_name"),
+                    "to": q.get("to_station_name"),
+                    "dep": dep, "arr": q.get("arrive_time"),
+                    "dur": q.get("lishi")})
+    return out
+
+
+def fetch_stops(date=DEFAULT_DATE, interval=3.5, price=None, log=print,
+                conc=DEFAULT_CONC, cache_path=None):
+    """车次经停站，增量抓取（已有缓存则跳过）"""
+    price = price or json.load(open(_cache_paths()[0], encoding="utf-8"))
+    out = cache_path or os.path.join(DATA, "stops.json")
+    done = json.load(open(out, encoding="utf-8")) if os.path.exists(out) else {}
+    st = fetch_stations()
+
+    trains = _trains_from_price(price, st)
+    usable = [t for t in trains if t["train_no"] and t["fc"] and t["tc"]]
+    todo = [t for t in usable if not done.get(t["key"], {}).get("stops")]
+    log(f"经停站：共 {len(trains)} 趟，待抓 {len(todo)} 趟"
+        f"（直连 · 并发 {conc}）")
+    got, _miss = fetch_stop_batch(todo, date, conc=conc, interval=interval,
+                                  log=log)
+    if got:
+        done.update(got)
+        os.makedirs(DATA, exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(done, f, ensure_ascii=False, indent=1)
     return done
 
 
@@ -222,8 +442,8 @@ def fetch_live(date=DEFAULT_DATE, interval=4.0,
     payload = {"captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                "date": date, "trains": snap}
     if save:
-        json.dump(payload, open(os.path.join(DATA, "live_snapshot.json"), "w",
-                                encoding="utf-8"), ensure_ascii=False)
+        json.dump(payload, open(_cache_paths()[1], "w", encoding="utf-8"),
+                  ensure_ascii=False)
     return payload
 
 
@@ -244,24 +464,176 @@ def _price_of(v):
         return None
 
 
-def _route_of(mid):
-    m = set(mid)
-    huai = {"合肥", "阜阳", "淮南", "水家湖", "颍上", "寿县", "太和", "亳州",
-            "安庆", "芜湖", "周口", "扶沟", "临泉", "许昌"}
-    yang = {"淮安", "扬州", "宝应", "高邮", "宿迁", "泗阳", "睢宁"}
-    if m & yang and "南京" not in m:
-        return "连镇通道"
-    if m & huai:
-        return "合杭通道"
-    return "京沪通道"
+ALIAS_PATH = os.path.join(DATA, "channel_aliases.json")
+DEFAULT_FALLBACK_CHANNEL = "主通道"
+
+
+def load_aliases():
+    try:
+        with open(ALIAS_PATH, encoding="utf-8") as f:
+            j = json.load(f)
+        return j if isinstance(j, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_aliases(a):
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        with open(ALIAS_PATH, "w", encoding="utf-8") as f:
+            json.dump(a, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def route_fallback():
+    """只有一条通道时用的兜底名（自定义起终点时不再硬套「京沪通道」）"""
+    return "主通道"
+
+
+def _channel_key(members, tot):
+    """通道的「特征站」：本通道覆盖率最高、全局覆盖率最低的那个中间城市。
+
+    郑州→常州 实测：京沪 → 蚌埠、合杭 → 合肥、连镇 → 宿迁。
+    只作别名表的定位键（自动命名也用它），不影响分组。
+    """
+    cc = Counter()
+    for r in members:
+        cc.update(set(r["mid"]))
+    cand = [s for s in cc if cc[s] >= 2]
+    if not cand:
+        return ""
+    cand.sort(key=lambda s: (-(cc[s] / max(1, tot.get(s, 0))), -cc[s], s))
+    return cand[0]
+
+
+def split_channels(recs, threshold=0.45, min_frac=0.03, min_abs=2):
+    """把车次按「中间城市集合」的相似度聚成若干条通道（返回分组后的下标列表）。
+
+    一条干线两侧常有好几条走廊（郑州→常州 就同时有 京沪线 / 郑阜+商合杭 /
+    郑徐+连镇 三条），它们的车站轴互不相同，画在同一根轴上会互相穿插，
+    所以必须先分组、每组一根轴。旧实现用「经过合肥 / 经过淮安扬州」这类**手写
+    关键词**判定，换条路线（上海→杭州）就全落进「主通道」里了。
+
+    做法：
+      1. 每趟车的中间城市集合两两算 Jaccard，≥ threshold 的连边 → 连通分量
+      2. 太小的分量（< max(min_abs, min_frac×总趟数)）按「与哪个大分量重叠最多」
+         并进去 —— 少数走向独特的车次（如经黄口的 K154）不该自立一条通道
+
+    ⚠️ threshold 取 0.45 是实测调出来的。0.50 会把「经合肥→芜湖→宣城→湖州」
+    这一条走廊拆成两条（郑阜方向一趟车停 12 站、商合杭方向只停 9 站，
+    Jaccard 只有 0.40）；0.40 又会把 京沪 与 合杭 并成一条（郑州→常州 3 条变 2 条）。
+    0.45 在已有缓存路线上都划得对：
+      郑州→常州 47 趟 → 京沪 32 / 合杭 12 / 连镇 3
+      郑州→上海 92 趟 → 京沪 66 / 盐通 15 / 宣城 8 / 连镇 3
+      郑州→南京 79 趟 → 徐州 55 / 合肥 24
+      常州→上海 99 趟 → 苏州 84 / 张家港 15
+      南京→上海 18 趟 / 合肥→常州 10 趟 → 各 1 条
+    """
+    n = len(recs)
+    if n == 0:
+        return []
+    sets = [set(r["mid"]) for r in recs]
+    parent = list(range(n))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for a in range(n):
+        for b in range(a + 1, n):
+            A, B = sets[a], sets[b]
+            if not A or not B:
+                continue
+            if len(A & B) / len(A | B) >= threshold:
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[rb] = ra
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    groups = sorted(groups.values(), key=len, reverse=True)
+
+    floor = max(min_abs, int(n * min_frac))
+    big = [g for g in groups if len(g) >= floor]
+    small = [g for g in groups if len(g) < floor]
+    if not big:                       # 全部都很小（车次极少）→ 合成一条
+        return [list(range(n))]
+    for s in small:
+        S = set()
+        for i in s:
+            S |= sets[i]
+        best, bv = None, -1.0
+        for g in big:
+            G = set()
+            for i in g:
+                G |= sets[i]
+            v = len(S & G) / max(1, len(S | G))
+            if v > bv:
+                best, bv = g, v
+        best.extend(s)
+    big.sort(key=len, reverse=True)
+    return big
+
+
+def name_channels(recs, groups, route_key="", log=print):
+    """给每组通道起名，并维护可编辑的别名表 `data/channel_aliases.json`。
+
+    文件格式（`names` 可以手改，`keys` 是每次构建重算的「特征站」，仅供对照）：
+        {
+          "郑州→常州": {"names": ["京沪通道","合杭通道","连镇通道"],
+                       "keys":  ["蚌埠","合肥","宿迁"]}
+        }
+    自动名 = 特征站 + 「通道」；只有一条通道时用 `主通道`。
+    """
+    tot = Counter()
+    for r in recs:
+        tot.update(set(r["mid"]))
+    keys, autos = [], []
+    for g in groups:
+        k = _channel_key([recs[i] for i in g], tot)
+        keys.append(k)
+        autos.append((k + "通道") if k else route_fallback())
+
+    alias = load_aliases()
+    ent = alias.get(route_key)
+    names = None
+    if isinstance(ent, dict):
+        names = ent.get("names")
+    elif isinstance(ent, list):        # 兼容手写的等价简写
+        names = ent
+    if not names or len(names) != len(groups):
+        names = autos
+        if route_key:
+            alias[route_key] = {"names": names, "keys": keys}
+            save_aliases(alias)
+    else:
+        if not isinstance(ent, dict) or ent.get("keys") != keys:
+            alias[route_key] = {"names": names, "keys": keys}
+            save_aliases(alias)
+    log(f"通道划分：{len(groups)} 条 → " +
+        " / ".join(f"{nm}({len(g)})" for nm, g in zip(names, groups)))
+    return names
 
 
 def _dedupe(names):
-    """合并连续重复站（同城双站归一化后会出现 郑州→郑州）"""
-    out = []
+    """合并连续重复站，并丢掉「回头站」。
+
+    同城双站归并到城市后会出现假回头路，例如 G3191 的真实经停是
+    郑州 → 新郑机场 → **郑州航空港**，归并成 郑州 → 新郑机场 → 郑州，
+    站点图上就成了一个环，`build_axes` 的拓扑排序直接失效、整条轴顺序乱掉。
+    保留**首次**出现的位置（而不是最后一次）：真实里程顺序里 郑州 在新郑机场之前。
+    ⚠️ 只影响轴与通道判定；图上画点仍用原始 seg，同城多站照旧各画各的。
+    """
+    out, seen = [], set()
     for n in names:
-        if not out or out[-1] != n:
-            out.append(n)
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
     return out
 
 
@@ -383,8 +755,20 @@ def build_axes(recs):
                 if indeg[m] == 0:
                     stack.append(m)
 
-        if len(topo) != len(nodes):     # 补边引入环 → 退回全局骨架顺序
-            axes[route] = [n for n in master if n in nodes]
+        if len(topo) != len(nodes):
+            # 兜底：补边或同城归并仍可能引入环（如 郑州 ⇄ 新郑机场）。
+            # 用「平均相对位置」排序 —— 每趟车里该站处在行程的百分之几处，
+            # 取平均。比按首次出现次序排稳得多（首次出现序会被第一条车次带偏）。
+            pos, hit = defaultdict(float), Counter()
+            for s in seqs:
+                d = len(s) - 1
+                if d <= 0:
+                    continue
+                for i, x in enumerate(s):
+                    pos[x] += i / d
+                    hit[x] += 1
+            axes[route] = sorted(nodes, key=lambda x:
+                                 (pos[x] / max(1, hit[x]), -cnt.get(x, 0), x))
             freqs[route] = dict(cnt)
             continue
 
@@ -403,13 +787,12 @@ def build_axes(recs):
     return axes, freqs
 
 
-def build(date=DEFAULT_DATE, price=None, stops=None, live=None):
+def build(date=DEFAULT_DATE, price=None, stops=None, live=None, log=print):
     """合并三类数据 -> 前端数据集"""
-    price = price or json.load(open(os.path.join(DATA, "price_raw.json"),
-                                    encoding="utf-8"))
+    price = price or json.load(open(_cache_paths()[0], encoding="utf-8"))
     stops = stops or json.load(open(os.path.join(DATA, "stops.json"),
                                     encoding="utf-8"))
-    lp = os.path.join(DATA, "live_snapshot.json")
+    lp = _cache_paths()[1]
     live = live if live is not None else (
         json.load(open(lp, encoding="utf-8")) if os.path.exists(lp) else {})
     # ⚠️ 日期守卫：快照只在「快照日期 == 本次乘车日期」时才可用。
@@ -424,24 +807,49 @@ def build(date=DEFAULT_DATE, price=None, stops=None, live=None):
         q = it["queryLeftNewDTO"]
         order[q["station_train_code"] + "|" + q["start_time"]] = q
 
-    # ---- 1) 解析每趟车的区段 / 通道 / 完整站序 ----
-    recs = []
+    # ---- 1) 解析每趟车的区段 / 完整站序 ----
+    segs = []
     for key, v in stops.items():
         q = order.get(key)
         if not q:
             continue
         raw = [s["n"] for s in v["stops"]]
-        try:
-            i = next(i for i, s in enumerate(raw) if s in FROM_ST)
-            j = next(j for j, s in enumerate(raw) if s in TO_ST and j > i)
-        except StopIteration:
+        # 区段端点**优先认查询载荷里点名的那个站**，认不到再退回「同城集合里的
+        # 第一个」。只用后者会出错：查「郑州西→上海虹桥」时 G3298 的经停里
+        # 郑州东排在郑州西前面，取点会从郑州东开始，起终站就与查询不符。
+        fn = q.get("from_station_name")
+        tn = q.get("to_station_name")
+        i = next((k for k, s in enumerate(raw) if fn and s == fn), None)
+        if i is None:
+            i = next((k for k, s in enumerate(raw) if s in FROM_ST), None)
+        j = None
+        if i is not None:
+            j = next((k for k, s in enumerate(raw) if tn and s == tn and k > i), None)
+            if j is None:
+                j = next((k for k, s in enumerate(raw) if s in TO_ST and k > i), None)
+        if i is None or j is None:
             continue
         seg = v["stops"][i:j + 1]
-        seq = _dedupe([norm(s["n"]) for s in seg])
-        recs.append({"key": key, "v": v, "q": q, "seg": seg,
-                     "route": _route_of(seq[1:-1]), "seq": seq})
+        segs.append((key, v, q, seg))
 
-    # ---- 2) 自动生成完整车站轴（含全部真实经停站） ----
+    def _norm(name):
+        return norm(name, frm=FROM_NAME, to=TO_NAME)
+
+    recs = []
+    for key, v, q, seg in segs:
+        seq = _dedupe([_norm(s["n"]) for s in seg])
+        recs.append({"key": key, "v": v, "q": q, "seg": seg, "seq": seq,
+                     "mid": seq[1:-1]})
+
+    # ---- 2) 通道划分（聚类，不再靠手写关键词）----
+    groups = split_channels(recs)
+    names = name_channels(recs, groups, route_key=f"{FROM_NAME} → {TO_NAME}",
+                          log=log)
+    for nm, g in zip(names, groups):
+        for i in g:
+            recs[i]["route"] = nm
+
+    # ---- 3) 自动生成完整车站轴（含全部真实经停站） ----
     axes, freqs = build_axes(recs)
 
     # ---- 3) 组装车次 ----
@@ -460,7 +868,7 @@ def build(date=DEFAULT_DATE, price=None, stops=None, live=None):
         on_axis = set(axes[r["route"]])
         sp = []
         for k, s in enumerate(seg):
-            city = norm(s["n"])
+            city = _norm(s["n"])
             if city not in on_axis:
                 continue
             t = _pick_time(s.get("arr"), s.get("dep"), k == 0)
@@ -473,8 +881,16 @@ def build(date=DEFAULT_DATE, price=None, stops=None, live=None):
 
         trains.append({"code": v["code"], "type": v["code"][0],
                        "route": r["route"],
-                       "dep": v["dep"], "arr": v["arr"], "dur": v["dur"],
-                       "from": v["from"], "to": v["to"],
+                       # ⚠️ 起终站与到发时刻必须取自**本次查询的 price 载荷**，
+                       # 或本次算出的区段端点 —— 不能再用经停缓存 v 里的值。
+                       # stops.json 是按「车次|开车时刻」共享的增量缓存，某趟车第一次
+                       # 是在哪个区间被抓的，就永久记着那个区间的起终站；换区间后
+                       # （郑州→常州 改查 郑州→上海）会张冠李戴：99 趟里 72 趟的
+                       # 终到站显示成上一次的 常州/南京，而车其实开到了上海。
+                       "dep": q.get("start_time") or v["dep"],
+                       "arr": q.get("arrive_time") or v["arr"],
+                       "dur": q.get("lishi") or v["dur"],
+                       "from": seg[0]["n"], "to": seg[-1]["n"],
                        "seats": seats, "stops": sp})
 
     trains.sort(key=lambda t: t["dep"])
@@ -490,14 +906,23 @@ def build(date=DEFAULT_DATE, price=None, stops=None, live=None):
     rowst = {rt: {c: [n for n, _ in cnt.most_common()] for c, cnt in rows.items()}
              for rt, rows in _rows.items()}
 
+    # ---- 5) 每通道一句话描述（取停靠车次最多的几个中间站）----
+    desc = {}
+    for rt, sts in axes.items():
+        f = freqs.get(rt, {})
+        mid = sorted(sts[1:-1], key=lambda s: (-(f.get(s, 0)),))
+        desc[rt] = ("经 " + " · ".join(mid[:4])) if mid else ""
+
     data = {
         "meta": {
             "travel_date": date,
             "price_captured": time.strftime("%Y-%m-%d %H:%M"),
             "live_captured": live.get("captured_at", "—"),
             "route": f"{FROM_NAME} → {TO_NAME}",
+            "from_name": FROM_NAME, "to_name": TO_NAME,
             "from_code": FROM_CODE, "to_code": TO_CODE,
         },
+        "desc": desc,
         "axes": axes, "freq": freqs, "rowst": rowst, "trains": trains,
     }
     os.makedirs(DATA, exist_ok=True)
@@ -523,15 +948,149 @@ def inject_html(data=None):
     return HTML
 
 
+def _seg_triples(stops, frm, to, fcity=None, tcity=None):
+    """经停列表 + 区段两端 -> 前端用的 [[实际站名, 城市行, 时刻], ...]
+
+    端点优先按站名精确匹配；匹配不到就退化成整段（不丢车）。
+    城市行用 norm()，与主数据集同一套归一化规则。
+
+    ⚠️ 首末站的「城市行」要**强制**成该程的起终点城市：武进 / 戚墅堰 都是常州的车站，
+    但 norm() 认不出来（不在 CITY_FIX、也不以「常州」开头），会被判成「武进」行 ——
+    这一行不在轴上，点直接被丢掉，线就只能从半路开始画（实测 G7155 / G2421：
+    武进→上海松江，起点丢在武进，线从张家港才开始）。
+    """
+    raw = [s.get("n") for s in stops]
+    i = next((k for k, s in enumerate(raw) if frm and s == frm), 0)
+    j = next((k for k, s in enumerate(raw) if to and s == to and k > i), len(raw) - 1)
+    seg = stops[i:j + 1]
+    out = []
+    for k, s in enumerate(seg):
+        t = _pick_time(s.get("arr"), s.get("dep"), k == 0)
+        if not t:
+            continue
+        nm = s.get("n")
+        city = norm(nm, frm=fcity, to=tcity)
+        if k == 0 and fcity and nm == frm:
+            city = fcity
+        elif k == len(seg) - 1 and tcity and nm == to:
+            city = tcity
+        out.append([nm, city, t])
+    return out
+
+
+def leg_stops(items, date=DEFAULT_DATE, interval=0.4, source=None, log=print,
+              conc=DEFAULT_CONC):
+    """补全中转两程车次的经停站（和直达**同一套查询原理**）。
+
+    items = [{"key","code","dep","from","to","tn","fc","tc","fcity","tcity"}, ...]
+      tn/fc/tc = 内部列车编号与两端电报码，来自该程的票价载荷（`_leg_trains` 带出来的）
+      fcity/tcity = 该程两端所属城市，用来强制首末站的城市行
+
+    直达用 `fetch_stops` 直连 `czxx/queryByTrainNo`，**一趟一次请求**；
+    而走 MCP 时它得先把「车次号」解析成内部编号（多一次 leftTicket 请求），
+    实测 1.2 秒/趟 vs 直连 0.23 秒/趟 —— 所以这里一律直连。
+    并发数 `conc` 与直达共用前端「高级设置」里的那一档。
+    结果并入**共享**的 stops.json（按车次存、与路线无关），
+    所以同一个枢纽第二次进来几乎瞬时完成。
+
+    返回 {"stops": {key: [[站名, 城市行, 时刻], ...]}, "missing":[key...]}
+    """
+    out_path = os.path.join(DATA, "stops.json")
+    done = {}
+    if os.path.exists(out_path):
+        with open(out_path, encoding="utf-8") as f:
+            done = json.load(f)
+
+    def _names(v):
+        return [s.get("n") for s in (v.get("stops") or [])]
+
+    todo, bad = [], []
+    for it in items:
+        nm = _names(done.get(it.get("key")) or {})
+        if not (it.get("tn") and it.get("fc") and it.get("tc")):
+            bad.append(it)
+        elif not nm:
+            todo.append(it)
+        elif it.get("to") and it["to"] not in nm:
+            # ⚠️ 该车次已有经停，但范围不够：同一趟车「同起点不同终点」的变体
+            # （金坛→上海虹桥 / 金坛→上海松江）共用 code|dep 一条缓存，
+            # 先抓的那个可能把范围截短。缺站就用本变体的终点重抓一次。
+            todo.append(it)
+    got, missing = {}, []
+    for it in bad:
+        log(f"  {it.get('code')} 缺列车编号/电报码，跳过")
+        missing.append(it.get("key"))
+    log(f"经停补全：共 {len(items)} 趟，待抓 {len(todo)} 趟"
+        f"（直连 · 并发 {conc}）")
+
+    # 去重：同一趟车的多个变体（同起点不同终点）共用一次抓取
+    uniq, seen = [], set()
+    for it in todo:
+        if it["key"] in seen:
+            continue
+        seen.add(it["key"])
+        uniq.append({"key": it["key"], "code": it.get("code"),
+                     "train_no": it.get("tn"),          # 注意：中转载荷里 tn = 内部编号
+                     "fc": it.get("fc"), "tc": it.get("tc"),
+                     "frm": it.get("from"), "to": it.get("to"),
+                     "dep": it.get("dep"), "arr": it.get("arr"),
+                     "dur": it.get("dur")})
+    fresh, miss = fetch_stop_batch(uniq, date, conc=conc, interval=interval,
+                                   log=log)
+    dirty = False
+    for k, rec in fresh.items():
+        old_n = len(_names(done.get(k) or {}))
+        # 只在「范围不比原来窄」时才回写：重抓本是为了补全，
+        # 万一这次返回更短，别把已经够用的那条换掉
+        if len(rec["stops"]) >= old_n:
+            done[k] = rec
+            dirty = True
+        else:
+            log(f"  {rec['code']} 本次只返回 {len(rec['stops'])} 站"
+                f" < 已有 {old_n} 站，保留原记录")
+    missing.extend(miss)
+    for it in uniq:
+        if it["key"] not in done:
+            missing.append(it["key"])
+    if dirty:
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(done, f, ensure_ascii=False, indent=1)
+        except Exception as e:
+            log(f"  经停缓存写入失败：{e}")
+
+    for it in items:
+        v = done.get(it.get("key")) or {}
+        if v.get("stops"):
+            # ⚠️ 返回键用 vkey（含 from/to）：同一趟车会有「同起点、不同终点」的多个
+            # 变体（G7155 金坛→上海虹桥 / 金坛→上海松江），它们 code|dep 相同，
+            # 只用 code|dep 当返回键会互相覆盖、终点串号。
+            # 抓取仍按 code|dep 去重（一份经停服务所有变体），切段各切各的。
+            got[it.get("vkey") or it.get("key")] = _seg_triples(
+                v["stops"], it.get("from"), it.get("to"),
+                it.get("fcity"), it.get("tcity"))
+        elif it.get("key") not in missing:
+            missing.append(it.get("key"))
+    log(f"经停补全完成：新抓 {len(fresh)} 趟，本次可返回 {len(got)} 趟，"
+        f"仍缺 {len(missing)} 趟")
+    return {"stops": got, "missing": missing}
+
+
 # ---------------- 中转查询（点击站名时用） ----------------
 
-def _leg_trains(price_payload, live_payload):
+def _leg_trains(price_payload, live_payload, fcity=None, tcity=None):
     """(票价旧结构, 余票快照) -> 统一车次列表
 
     统一结构 = [{"code","type","from","to","dep","arr","dur","seats"}]，
     seats 与 build() 产出的完全一致，所以前端可以走同一套渲染。
+    另带 tn/fc/tc（直连查经停要用的内部编号与电报码）和 fcity/tcity
+    （该程两端所属城市，前端画端点行、后端切区段都要用）。
     """
     lmap = (live_payload or {}).get("trains", {}) or {}
+    try:
+        names = fetch_stations()
+    except Exception:
+        names = {}
     out = []
     for it in (price_payload or {}).get("data") or []:
         q = it.get("queryLeftNewDTO") or {}
@@ -547,11 +1106,16 @@ def _leg_trains(price_payload, live_payload):
             if p is None and av is None:
                 continue
             seats[pkey] = {"n": name, "p": p, "a": av, "r": rank}
+        fn = q.get("from_station_name")
+        tn = q.get("to_station_name")
         out.append({"code": code, "type": code[0],
-                    "from": q.get("from_station_name"),
-                    "to": q.get("to_station_name"),
+                    "from": fn, "to": tn,
                     "dep": dep, "arr": q.get("arrive_time"),
-                    "dur": q.get("lishi"), "seats": seats})
+                    "dur": q.get("lishi"), "seats": seats,
+                    "tn": q.get("train_no"),
+                    "fc": q.get("from_station_telecode") or names.get(fn),
+                    "tc": q.get("to_station_telecode") or names.get(tn),
+                    "fcity": fcity, "tcity": tcity})
     out.sort(key=lambda t: t["dep"])
     return out
 
@@ -584,7 +1148,7 @@ def query_transfer(date=DEFAULT_DATE, via="徐州", source=None, interval=2.5,
                     except Exception as e:
                         warn.append(f"{a}→{b} 余票未取到：{str(e)[:80]}")
                         log(f"  {a}→{b} 余票失败（忽略）：{str(e)[:80]}")
-                    res.append({"from": a, "to": b, "trains": _leg_trains(p, lv)})
+                    res.append({"from": a, "to": b, "trains": _leg_trains(p, lv, a, b)})
             return {"date": date, "via": via, "source_used": "mcp",
                     "captured_at": stamp,
                     "legs": res, "warnings": warn}
@@ -614,7 +1178,7 @@ def query_transfer(date=DEFAULT_DATE, via="徐州", source=None, interval=2.5,
         except RateLimited as e:
             warn.append(f"{a}→{b} 余票未取到：{e}")
             log(f"  {a}→{b} 余票被限流（忽略）")
-        res.append({"from": a, "to": b, "trains": _leg_trains(p, lv)})
+        res.append({"from": a, "to": b, "trains": _leg_trains(p, lv, a, b)})
     return {"date": date, "via": via, "source_used": "urllib",
             "captured_at": stamp,
             "legs": res, "warnings": warn}
@@ -625,33 +1189,47 @@ def query_transfer(date=DEFAULT_DATE, via="徐州", source=None, interval=2.5,
 SOURCE_ENV = "TRAIN_SOURCE"          # mcp | urllib | auto（默认 auto）
 
 
-def _fetch_via_mcp(date, want_live, interval, log):
-    """用 mcp-server-12306 取三类数据（票价 / 经停 / 余票）
+def _fetch_via_mcp(date, want_live, interval, log, conc=DEFAULT_CONC):
+    """用 mcp-server-12306 取票价 / 余票，经停站一律走直连（见 fetch_stop_batch）。
 
     返回 (price, stops, live)。任一步失败都抛异常，由调用方决定是否回退。
     """
     import mcp_client
     import mcp_source
+    price_cache, live_cache = _cache_paths()
     with mcp_client.open_client(log=lambda m: log("  " + m)) as cli:
-        price = mcp_source.load_price(cli, FROM_NAME, TO_NAME, date, log=log)
-        stops = mcp_source.load_stops(cli, price, date, interval=interval, log=log)
-        live = (mcp_source.load_live(cli, FROM_NAME, TO_NAME, date, log=log)
+        price = mcp_source.load_price(cli, FROM_NAME, TO_NAME, date, log=log,
+                                      save_path=price_cache)
+        live = (mcp_source.load_live(cli, FROM_NAME, TO_NAME, date, log=log,
+                                     save_path=live_cache)
                 if want_live else None)
+    # ⚠️ 经停**不走 MCP**：MCP 的 get-train-route-stations 每次要先发一次 leftTicket
+    # 把「车次号」解析成内部编号（请求数翻倍、单趟 1.2 秒），而票价载荷里本来就有
+    # `train_no`，直连一趟一次请求、0.25 秒。见 fetch_stop_batch 的说明。
+    stops = fetch_stops(date=date, interval=interval, price=price, log=log,
+                        conc=conc)
     return price, stops, live
 
 
 def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
-            source=None):
+            source=None, from_name=None, to_name=None, conc=DEFAULT_CONC):
     """完整刷新：取数 -> 构建 -> 注入
 
     取数有两套实现：
       mcp    —— 走 mcp-server-12306（stdio 子进程），自带重试与会话保持
       urllib —— 内置直连（原始实现），作为回退
     默认 auto：先试 mcp，失败则回退 urllib 并在报告里标明实际用的是哪套。
+
+    from_name / to_name 可指定本次的始发 / 终到站（车站名或城市名）；
+    不传则沿用进程内的当前路线，首次运行时为默认的 郑州 → 常州。
     """
+    if from_name or to_name:
+        set_route(from_name, to_name, log=log)
     src = (source or os.environ.get(SOURCE_ENV) or "auto").strip().lower()
     report = {"date": date, "steps": [], "ok": True,
-              "source": src, "source_used": None}
+              "source": src, "source_used": None,
+              "route": f"{FROM_NAME} → {TO_NAME}",
+              "from_name": FROM_NAME, "to_name": TO_NAME}
 
     def step(name, fn, **kw):
         try:
@@ -673,9 +1251,9 @@ def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
     price = stops = live = None
     mcp_ok = False
     if src in ("mcp", "auto"):
-        log(f"数据源：MCP（mcp-server-12306）")
+        log(f"数据源：MCP（mcp-server-12306）＋ 直连经停")
         try:
-            price, stops, live = _fetch_via_mcp(date, want_live, interval, log)
+            price, stops, live = _fetch_via_mcp(date, want_live, interval, log, conc)
             mcp_ok = True
             report["source_used"] = "mcp"
             report["steps"].append({"name": "MCP 取数", "ok": True})
@@ -695,9 +1273,9 @@ def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
             report["ok"] = False
             return None, report
 
-        log("② 经停站（增量）")
+        log("② 经停站（增量 · 直连）")
         stops = step("经停站", fetch_stops, date=date, interval=interval,
-                     price=price, log=log)
+                     price=price, log=log, conc=conc)
         if stops is None:
             stops = json.load(open(os.path.join(DATA, "stops.json"),
                                    encoding="utf-8"))
@@ -712,7 +1290,8 @@ def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
                     "err": "接口被限流，沿用上次快照（余票可能不是最新）"})
 
     log("④ 构建数据集")
-    data = step("构建", build, date=date, price=price, stops=stops, live=live)
+    data = step("构建", build, date=date, price=price, stops=stops, live=live,
+                log=log)
     if data is None:
         report["ok"] = False
         return None, report
@@ -730,6 +1309,10 @@ if __name__ == "__main__":
     import sys
     argv = sys.argv[1:]
     date = argv[0] if argv and not argv[0].startswith("-") else DEFAULT_DATE
-    src = argv[argv.index("--source") + 1] if "--source" in argv else None
-    _, rep = refresh(date=date, source=src)
+
+    def arg(flag, dflt=None):
+        return argv[argv.index(flag) + 1] if flag in argv else dflt
+
+    _, rep = refresh(date=date, source=arg("--source"),
+                     from_name=arg("--from"), to_name=arg("--to"))
     print(json.dumps(rep, ensure_ascii=False, indent=2))

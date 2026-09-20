@@ -40,6 +40,16 @@ print(f"  前端有 / 经停缺 : {sorted(k_viz - k_stops) or '无'}")
 
 
 # ---------- 2. 轴外站点 ----------
+# 通道划分与车站轴都由 pipeline 从数据聚类得出，这里直接读数据集里的结果
+# （旧版会调 P._route_of / P.AXES，那两个手写实现 2026-09-20 已删除）
+AXES = viz.get("axes") or {}
+ROUTE_OF = {t["code"] + "|" + t["dep"]: t["route"] for t in viz["trains"]}
+
+
+def norm(n):
+    return P.norm(n, frm=P.FROM_NAME, to=P.TO_NAME)
+
+
 def seg_of(key, dto):
     """取出 郑州→常州 区段（未做城市归一化）"""
     v = stops[key]
@@ -65,18 +75,20 @@ for key, v in stops.items():
     seg = seg_of(key, dto)
     if not seg:
         continue
-    mid = [P.norm(s["n"]) for s in seg[1:-1]]
-    route = P._route_of(mid)
-    axis = set(P.AXES[route])
+    mid = [norm(s["n"]) for s in seg[1:-1]]
+    route = ROUTE_OF.get(key)
+    if not route:
+        continue
+    axis = set(AXES.get(route) or ())
     for s in seg[1:-1]:
-        nm = P.norm(s["n"])
+        nm = norm(s["n"])
         if nm not in axis:
             off_axis[route][nm].append(v["code"])
 
-for route in P.AXES:
+for route in AXES:
     if route not in off_axis:
         continue
-    print(f"\n【{route}】轴 {len(P.AXES[route])} 站，轴外站 {len(off_axis[route])} 个：")
+    print(f"\n【{route}】轴 {len(AXES[route])} 站，轴外站 {len(off_axis[route])} 个：")
     for st, codes in sorted(off_axis[route].items(), key=lambda x: -len(x[1])):
         print(f"    {st:<10} 被 {len(codes):>2} 趟停靠  {sorted(set(codes))}")
 
@@ -112,10 +124,10 @@ for t in viz["trains"]:
     seg = seg_of(key, q[key])
     if not seg:
         continue
-    mid = [P.norm(s["n"]) for s in seg[1:-1]]
-    route = P._route_of(mid)
-    axis = set(P.AXES[route])
-    full = [P.norm(s["n"]) for s in seg]
+    mid = [norm(s["n"]) for s in seg[1:-1]]
+    route = ROUTE_OF.get(key)
+    axis = set(AXES.get(route) or ())
+    full = [norm(s["n"]) for s in seg]
     full = [x for x in full if x in axis]           # 本应画出的站
     drawn = [s[0] for s in t["stops"]]              # 实际画出
     missing = [x for x in full if x not in drawn]
