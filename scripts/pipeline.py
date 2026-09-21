@@ -500,7 +500,8 @@ def _channel_key(members, tot):
     return cand[0]
 
 
-def split_channels(recs, threshold=0.5, min_frac=0.10, min_abs=3):
+def split_channels(recs, threshold=0.5, min_frac=0.10, min_abs=3,
+                   min_merge_overlap=None):
     """把车次按「中间城市集合」的相似度聚成若干条通道（返回分组后的下标列表）。
 
     一条干线两侧常有好几条走廊（郑州→常州 就同时有 京沪线 / 郑阜+商合杭 /
@@ -510,8 +511,21 @@ def split_channels(recs, threshold=0.5, min_frac=0.10, min_abs=3):
 
     做法：
       1. 每趟车的中间城市集合两两算 Jaccard，≥ threshold 的连边 → 连通分量
-      2. 太小的分量（< max(min_abs, min_frac×总趟数)）按「与哪个大分量重叠最多」
-         并进去 —— 少数走向独特的车次（如经黄口的 K154）不该自立一条通道
+      2. 太小的分量（< max(min_abs, min_frac×总趟数)）若与某条大通道的重叠度
+         ≥ min_merge_overlap，就并进重叠最多的那条 —— 像「经黄口的 K154」这种
+         **同走廊多停一站**的车，重叠度很高，本就不该自立一条通道。
+      3. 重叠度达不到、且自己**有**中间站的小分量，说明它的走向与谁都不同
+         （典型：上海南→湖州→杭州→合肥→南京→常州 这种绕行圈），
+         不能再硬塞进主干道，否则主干道的车站轴会被两套走向交替污染、
+         线画成人字交叉。这些「异形簇」统一收进一条独立通道。
+
+    `min_merge_overlap` 默认取 threshold，让判据自洽：两个对象（单车或整簇）
+    只有 Jaccard ≥ threshold 才算同一条通道，连边与并入用同一把尺子。
+
+    ⚠️ 旧版第 2 步是**无条件**并入「重叠度最大」的大分量，重叠度为 0 也照并，
+       于是 上海→常州 的 G8387（重叠度 0.00）、G8981（0.13）被塞进苏州通道，
+       把该通道的轴污染成「上海·苏州·无锡·湖州·杭州·合肥·南京·常州」两套走向
+       交替排列 —— 就是用户看到的「明显不和谐」。
 
     在已有缓存路线上实测（threshold=0.5），划出来的结果与人眼判断一致：
       郑州→常州 47 趟 → 京沪 32 / 合杭 12 / 连镇 3
@@ -519,7 +533,10 @@ def split_channels(recs, threshold=0.5, min_frac=0.10, min_abs=3):
       郑州→上海 99 趟 → 南京 75 / 淮安 24
       常州→上海 113 趟 → 苏州 92 / 张家港 21
       南京→上海 18 趟 → 1 条
+      上海→常州 287 趟 → 苏州 257 / 江阴 28 / 绕行 2（修复后）
     """
+    if min_merge_overlap is None:
+        min_merge_overlap = threshold
     n = len(recs)
     if n == 0:
         return []
@@ -552,6 +569,7 @@ def split_channels(recs, threshold=0.5, min_frac=0.10, min_abs=3):
     small = [g for g in groups if len(g) < floor]
     if not big:                       # 全部都很小（车次极少）→ 合成一条
         return [list(range(n))]
+    orphans, solo = [], []            # 零星异形车 / 走向独特但车次够多的簇
     for s in small:
         S = set()
         for i in s:
@@ -564,8 +582,31 @@ def split_channels(recs, threshold=0.5, min_frac=0.10, min_abs=3):
             v = len(S & G) / max(1, len(S | G))
             if v > bv:
                 best, bv = g, v
-        best.extend(s)
+        # ① 自己没有任何中间站（起终直达）→ 无从刻画走向，归到最大的那条通道；
+        # ② 与某条大通道重叠度达标 → 是同一走廊，并进去；
+        # ③ 走向独特但**车次够多**（≥ min_abs）→ 自己就是一条走廊，别硬塞进主干道，
+        #    也别和别的异形车混在一起（曾把「南沿江 21 趟」和 2 趟绕行圈混成一桶，
+        #    那条通道的轴又变成 25 站、两种走向交替 —— 等于白修）；
+        # ④ 剩下的零零星星（1~2 趟）→ 收进一条「其他」通道，免得满屏单趟选项卡。
+        if not S or bv >= min_merge_overlap:
+            best.extend(s)
+        elif len(s) >= min_abs:
+            solo.append(s)
+        else:
+            orphans.append((bv, s))
+    # ⚠️ 顺序要紧：主干道按趟数排在前，独立的异形走廊随后，最后才是零星桶。
+    # `name_channels` 的 names 与 groups 按下标一一对应，且靠「特征站」认名字，
+    # 所以这里分门别类地追加，不会串位。
     big.sort(key=len, reverse=True)
+    for s in sorted(solo, key=len, reverse=True):
+        big.append(s)
+    if orphans:
+        # 按与主干道的重叠度排序，让同一条绕行走向的车挨在一起，
+        # 便于 build_axes 给它们排出一根还算顺的轴
+        merged = []
+        for _, s in sorted(orphans, key=lambda t: -t[0]):
+            merged.extend(s)
+        big.append(merged)
     return big
 
 
@@ -578,15 +619,22 @@ def name_channels(recs, groups, route_key="", log=print):
                        "keys":  ["蚌埠","合肥","宿迁"]}
         }
     自动名 = 特征站 + 「通道」；只有一条通道时用 `主通道`。
+
+    特征站为空（该组没有任何城市出现两次，典型是刚被拆出来的「异形簇」只有一两趟车）
+    而**又不是唯一那条通道**时，叫 `其他通道` —— 叫「主通道」会和真正的主干道撞名。
     """
     tot = Counter()
     for r in recs:
         tot.update(set(r["mid"]))
+    multi = len(groups) > 1
     keys, autos = [], []
     for g in groups:
         k = _channel_key([recs[i] for i in g], tot)
         keys.append(k)
-        autos.append((k + "通道") if k else route_fallback())
+        if k:
+            autos.append(k + "通道")
+        else:
+            autos.append("其他通道" if multi else route_fallback())
 
     alias = load_aliases()
     ent = alias.get(route_key)
@@ -596,7 +644,36 @@ def name_channels(recs, groups, route_key="", log=print):
     elif isinstance(ent, list):        # 兼容手写的等价简写
         names = ent
     if not names or len(names) != len(groups):
-        names = autos
+        # 通道数变了，**人工维护的名字要尽量接回来**（否则 京沪通道 / 苏州通道
+        # 会被自动名顶掉，出现过「宁陵县通道」这种名字）。
+        # 认名字靠**特征站**：老 entries 里的 keys ↔ names 是一一对应的，
+        # 新通道的特征站若命中某个老 key，就沿用那个名字 —— 这条对「通道数变多」
+        # （拆出异形簇）和「通道数变少」（数据量变化让小簇被并回主干道）都成立，
+        # 比「按位置对」稳：变少时位置会整体前移，名字会串位。
+        old_names = names if isinstance(names, (list, tuple)) else None
+        old_keys = ent.get("keys") if isinstance(ent, dict) else None
+        by_key = {}
+        if old_names and old_keys:
+            for i, k in enumerate(old_keys):
+                if k and i < len(old_names):
+                    by_key.setdefault(k, old_names[i])
+        picked, used = [], set()
+        for i, k in enumerate(keys):
+            nm = by_key.get(k)
+            if nm and nm not in used:
+                picked.append(nm)
+                used.add(nm)
+            else:
+                picked.append(None)
+        # 特征站认不出来的，再按**位置**把剩下的老名字补齐：
+        # 特征站会随车次集合变化（徐州 → 蚌埠 / 南京 → 镇江），光靠它会把人工维护的
+        # 名字全丢掉（出现过「宁陵县通道」）；而「第 i 条大通道还是第 i 条」
+        # 在绝大多数情况下成立 —— 大通道的相对顺序只由趟数决定，很稳。
+        rest = iter([n for n in (old_names or []) if n not in used])
+        for i, nm in enumerate(picked):
+            if nm is None:
+                picked[i] = next(rest, autos[i])
+        names = picked
         if route_key:
             alias[route_key] = {"names": names, "keys": keys}
             save_aliases(alias)
@@ -713,7 +790,11 @@ def build_axes(recs):
         by_route[r["route"]].append(r["seq"])
 
     axes, freqs = {}, {}
-    for route, seqs in by_route.items():
+    # ⚠️ 通道的先后顺序**按趟数从多到少**排，不能直接用 by_route 的插入序：
+    #   插入序取决于「哪条通道的车次先出现在 recs 里」，随机性很大 ——
+    #   曾经因为「绕行通道」恰好占了 recs[0]，2 趟车的通道被排到第一个选项卡、
+    #   成为默认视图。按趟数排 → 主干道永远在最前，异形簇垫底。
+    for route, seqs in sorted(by_route.items(), key=lambda kv: -len(kv[1])):
         cnt = Counter()
         for s in seqs:
             for n in s:                 # 含首末站，避免起终点显示为 0 趟
@@ -792,23 +873,51 @@ def build(date=DEFAULT_DATE, price=None, stops=None, live=None, log=print):
         live = {}
     live_map = live.get("trains", {})
 
-    order = {}
+    # ---- 0) 把票价载荷按**物理车次**归并 ----
+    # 按城市查票时，12306 会为「同城各站 × 同城各站」的每一种组合各返回一条：
+    # G7744 就返回 4 条（上海松江/上海虹桥 → 武进/金坛），train_no 完全相同，
+    # 只有 from/to 与到发时刻不同。
+    # ⚠️ 旧写法用 `车次|开车时刻` 当字典键，同一时刻的两条会被后一条**悄悄覆盖**：
+    #    同一趟车在表里出现两次（上海松江→金坛 / 上海虹桥→武进），
+    #    而真正能选的组合（上海松江→武进）反而丢了 —— 始发/终到站筛选于是选不出来。
+    # train_no 才是物理车次编号；缺失时退回车次号，宁可少归并也别丢数据。
+    groups = {}
     for it in price["data"]:
         q = it["queryLeftNewDTO"]
-        order[q["station_train_code"] + "|" + q["start_time"]] = q
+        if not q.get("station_train_code"):
+            continue
+        groups.setdefault(q.get("train_no") or q["station_train_code"], []).append(q)
 
-    # ---- 1) 解析每趟车的区段 / 完整站序 ----
+    def _mins(hhmm):
+        """'02:06' → 126（分钟）。解析不了给 -1，排到最后。"""
+        try:
+            h, m = str(hhmm).split(":")
+            return int(h) * 60 + int(m)
+        except Exception:
+            return -1
+
+    # ---- 1) 解析每趟车的区段 / 完整站序（每个物理车次只出一条）----
     segs = []
-    for key, v in stops.items():
-        q = order.get(key)
-        if not q:
+    for tid, legs in groups.items():
+        # 归并成一条时取**跨度最大**的那条腿：历时最长 → 覆盖的站最多，
+        # 起终站、到发时刻、票价/余票都用它（代表「这趟车在本区间能坐的最远一段」）。
+        widest = max(legs, key=lambda q: (_mins(q.get("lishi")),
+                                          q.get("lishi") or "", q.get("start_time") or ""))
+        # 经停缓存是按 `车次|开车时刻` 存的；跨度最大那条腿的时刻若没抓到，
+        # 就用同车其它腿的键去取（经停是全车次的，哪条腿取出来都一样）
+        v = stops.get(widest["station_train_code"] + "|" + widest["start_time"])
+        if not v:
+            v = next((stops[k] for k in
+                      (q2["station_train_code"] + "|" + q2["start_time"] for q2 in legs)
+                      if k in stops), None)
+        if not v:
             continue
         raw = [s["n"] for s in v["stops"]]
         # 区段端点**优先认查询载荷里点名的那个站**，认不到再退回「同城集合里的
         # 第一个」。只用后者会出错：查「郑州西→上海虹桥」时 G3298 的经停里
         # 郑州东排在郑州西前面，取点会从郑州东开始，起终站就与查询不符。
-        fn = q.get("from_station_name")
-        tn = q.get("to_station_name")
+        fn = widest.get("from_station_name")
+        tn = widest.get("to_station_name")
         i = next((k for k, s in enumerate(raw) if fn and s == fn), None)
         if i is None:
             i = next((k for k, s in enumerate(raw) if s in FROM_ST), None)
@@ -820,16 +929,23 @@ def build(date=DEFAULT_DATE, price=None, stops=None, live=None, log=print):
         if i is None or j is None:
             continue
         seg = v["stops"][i:j + 1]
-        segs.append((key, v, q, seg))
+        # 这趟车在本区间内**所有**可选的始发站 / 终到站（同城各站），
+        # 给前端的「始发站 / 终到站」筛选用 —— 见上面 G7744 的例子。
+        fs = _dedupe([q2["from_station_name"] for q2 in legs
+                      if q2.get("from_station_name")])
+        ts = _dedupe([q2["to_station_name"] for q2 in legs
+                      if q2.get("to_station_name")])
+        segs.append((widest["station_train_code"] + "|" + widest["start_time"],
+                     v, widest, seg, fs, ts))
 
     def _norm(name):
         return norm(name, frm=FROM_NAME, to=TO_NAME)
 
     recs = []
-    for key, v, q, seg in segs:
+    for key, v, q, seg, fs, ts in segs:
         seq = _dedupe([_norm(s["n"]) for s in seg])
         recs.append({"key": key, "v": v, "q": q, "seg": seg, "seq": seq,
-                     "mid": seq[1:-1]})
+                     "mid": seq[1:-1], "fs": fs, "ts": ts})
 
     # ---- 2) 通道划分（聚类，不再靠手写关键词）----
     groups = split_channels(recs)
@@ -881,6 +997,11 @@ def build(date=DEFAULT_DATE, price=None, stops=None, live=None, log=print):
                        "arr": q.get("arrive_time") or v["arr"],
                        "dur": q.get("lishi") or v["dur"],
                        "from": seg[0]["n"], "to": seg[-1]["n"],
+                       # fs / ts = 这趟车在本区间内**所有**可选的始发 / 终到站
+                       # （同城各站，来自 12306 按城市查票返回的全部组合）。
+                       # 前端「始发站 / 终到站」筛选按这两个集合判，所以
+                       # 「上海松江 + 武进」这种不是归并后起终站的组合也能筛出来。
+                       "fs": r["fs"], "ts": r["ts"],
                        "seats": seats, "stops": sp})
 
     trains.sort(key=lambda t: t["dep"])
