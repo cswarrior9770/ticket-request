@@ -36,11 +36,6 @@
   .trow button.f{padding:5px 9px;}
   .trow .tcnt{font-size:11px;color:var(--tx3);white-space:nowrap;
     font-variant-numeric:tabular-nums;}
-  /* 始发站 / 终到站：按钮里带趟数小字 */
-  .trow button.f .ecnt{margin-left:5px;font-size:10px;opacity:.5;
-    font-variant-numeric:tabular-nums;}
-  .trow button.f.on .ecnt{opacity:.85;}
-  #endgrp{gap:0;}
   /* 区间筛选（发车时间 / 票价）：双滑块 + 数值 + 重置 */
   #rangep{flex-direction:column;align-items:stretch;gap:9px;}
   .rrow{display:flex;align-items:center;gap:9px;}
@@ -61,10 +56,6 @@
     border:1px solid var(--bd);background:var(--bg);color:var(--tx2);
     cursor:pointer;transition:.12s;white-space:nowrap;}
   .rreset:hover{background:var(--bg3);color:var(--tx);border-color:var(--tx3);}
-  /* 票价轨道上的档位刻度：每个真实票价一条细线，让「离散档位」看得见 */
-  .rlev{position:absolute;inset:0;pointer-events:none;}
-  .rlev i{position:absolute;top:50%;width:1px;height:7px;margin-top:-3.5px;
-    background:var(--tx3);opacity:.4;}
   .cols .tw{max-height:620px;}
   @media (max-width:1260px){ .cols{grid-template-columns:1fr;} }
 
@@ -381,7 +372,6 @@
       </div>
       <div class="grp" id="typegrp"></div>
       <div class="grp" id="seatgrp"></div>
-      <div class="grp" id="endgrp"></div>
       <div class="grp" id="rangep">
         <div class="rrow">
           <span class="lbl">发车时间</span>
@@ -397,7 +387,6 @@
           <span class="lbl">票价范围</span>
           <div class="rng" id="priceRng">
             <div class="rtrack"><div class="rfill"></div>
-              <div class="rlev" id="priceLev"></div>
               <span class="rgrip l" data-g="l" title="拖动调整下限"></span>
               <span class="rgrip r" data-g="r" title="拖动调整上限"></span></div>
           </div>
@@ -618,30 +607,6 @@ function renderTypes(){
       `<button class="f${allOn?" on":""}" data-tall="0" data-leg="0">全部</button>`+
       keys.map(k=>typeBtn(k,typeSel.has(k),0,false)).join("")+`</div>`;
   }
-}
-/* 始发站 / 终到站两行（见文件下方 endStations 的说明）：
-   按钮 = 该站 + 趟数小字，点「全部」在全选 / 全不选之间切换。 */
-function renderEnds(){
-  const g=document.getElementById("endgrp");
-  if(!g) return;
-  syncEndKey();
-  const st=endStations(), lns=[], total=routeTrains().length;
-  [["from","始发站",st.from,st.cfr,fromSel],
-   ["to","终到站",st.to,st.cto,toSel]].forEach(function(row){
-    const side=row[0], lbl=row[1], arr=row[2], cnt=row[3], sel=row[4];
-    if(!arr.length) return;
-    const on=s=>!sel||sel.has(s);                  // null = 不限，等于全选
-    const allOn=arr.every(on);
-    lns.push(`<div class="trow"><span class="lbl">${lbl}</span>`+
-      `<button class="f${allOn?" on":""}" data-endall="${side}"`+
-      ` title="${lbl}：全部 / 全不选「${arr.join("、")}」">全部</button>`+
-      arr.map(s=>`<button class="f${on(s)?" on":""}" data-end="${side}" `+
-        `data-endv="${esc(s)}" title="${esc(s)}：${cnt.get(s)||0} 趟 / `+
-        `共 ${total} 趟">`+
-        `${esc(s)}<span class="ecnt">${cnt.get(s)||0}</span></button>`).join("")+
-      `</div>`);
-  });
-  g.innerHTML=lns.join("");
 }
 function renderSeats(){
   const grp=document.getElementById("seatgrp");
@@ -1145,72 +1110,19 @@ function matchQ(t){
   const num=(c.match(/\d+/)||[""])[0];
   return c.indexOf(query)>=0||(num&&num.indexOf(query)>=0);
 }
-/* ---------- 始发站 / 终到站筛选 ----------
-   按钮只列**当前视图里真实出现过的实测起终站**（如 常州 159 趟 / 常州北 78 趟），
-   筛了不会有结果的车站不该出现在按钮里。
-   直达模式：始发站 = 每趟车的实测出发站，终到站 = 实测到达站。
-   中转模式：只筛线路两端 —— 始发站取第 1 程的出发站、终到站取第 2 程的
-   到达站（第 1 程的「终到」是几十个中转站，筛它没有意义）。
-   null = 不限（等价于全选）。 */
-let ENDKEY="", fromSel=null, toSel=null;
-function endStations(){
-  const fr=new Map(), to=new Map();          // 站名 → 趟数
-  const inTr=!!(TRANSFER&&TRANSFER.data);
-  routeTrains().forEach(t=>{
-    if(t.from==null||t.to==null) return;
-    if(!inTr||t.leg===1) fr.set(t.from,(fr.get(t.from)||0)+1);
-    if(!inTr||t.leg===2) to.set(t.to,(to.get(t.to)||0)+1);
-  });
-  const srt=m=>Array.from(m.keys()).sort((a,b)=>(m.get(b)-m.get(a))||a.localeCompare(b,"zh"));
-  return {from:srt(fr),to:srt(to),cfr:fr,cto:to};
-}
-/* 站点集合变了（换线路 / 进出中转）→ 回到「不限」，
-   免得上一次的筛选悄悄把新车次筛掉还看不出原因 */
-function syncEndKey(){
-  const st=endStations();
-  const k=st.from.join(",")+"|"+st.to.join(",")+"|"+((TRANSFER&&TRANSFER.data)?"T":"D");
-  if(k===ENDKEY) return;
-  ENDKEY=k; fromSel=null; toSel=null;
-}
-function setEndSel(side,set){ if(side==="from") fromSel=set; else toSel=set; }
-/* ⚠️ 中转模式下必须**按程**判断：终到站筛选只该影响第 2 程。
-   若不分程，选了「终到站 = 常州北」会把第 1 程全筛掉 —— 第 1 程的到达站
-   是中转站（徐州东），永远不在终到站集合里，图上会只剩半截。 */
-function passEnd(t){
-  if(TRANSFER&&TRANSFER.data&&t.leg){
-    if(t.leg===1) return !fromSel||fromSel.has(t.from);
-    if(t.leg===2) return !toSel||toSel.has(t.to);
-    return true;
-  }
-  return (!fromSel||fromSel.has(t.from))&&(!toSel||toSel.has(t.to));
-}
 function visible(t){
-  return passType(t)&&(!onlyTick||!!t.best)&&matchQ(t)&&passDep(t)&&passPrice(t)&&passEnd(t);
+  return passType(t)&&(!onlyTick||!!t.best)&&matchQ(t)&&passDep(t)&&passPrice(t);
 }
 
 /* ---------- 发车时间 / 票价 区间筛选 ----------
    每个区间 = 双滑块。v=null 表示「不限」；一旦拖动就存成 [lo,hi]。
    票价取「所选席别」中的价格，只要**有任意一个**落在区间内就算通过
    —— 这样「这趟车有 100~300 元的可选席别」才符合直觉，
-   否则用最低价判断会把「硬座便宜但已售罄」的车错杀。
-
-   票价的档位**不是等距的**：price.lvls = 当前范围里实际出现过的每一个票价
-   （去重升序，由 syncRanges 填），拖动时吸附到这些值上，上下限也直接取
-   真实的最低价 / 最高价。于是滑块落到哪，那个价位就真有一趟车；两端还能
-   收到同一档，等于「只看这个价位的车」。 */
+   否则用最低价判断会把「硬座便宜但已售罄」的车错杀。 */
 const RANGES={
   dep:{min:0,max:24,step:0.25,v:null,fmt:h=>(h>=24?"24:00":fmtT(h))},
-  price:{min:0,max:1000,v:null,fmt:fmtMoney,lvls:null},
+  price:{min:0,max:1000,step:5,v:null,fmt:p=>"¥"+Math.round(p)},
 };
-/* 票价显示保留必要的小数位：12306 不少票价以 .5 结尾，
-   四舍五入成整数会跟滑块的档位值对不上（显示 ¥75、实际 74.5，拖到 ¥75 反而筛掉它） */
-function fmtMoney(p){ return "¥"+(Math.round(p*100)/100); }
-function esc(s){return String(s==null?"":s)
-  .replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
-/* 档位吸附：≤v 的最大档 / ≥v 的最小档。两个方向都只会把区间放宽，
-   所以「切席别 / 换通道导致档位集合变化」时不会把原本命中的车筛掉 */
-function snapDown(lv,v){ let r=lv[0]; for(const x of lv){ if(x<=v+1e-9) r=x; else break; } return r; }
-function snapUp(lv,v){ for(const x of lv){ if(x>=v-1e-9) return x; } return lv[lv.length-1]; }
 let rangeScope="";
 function rFull(R){ return !R.v||(R.v[0]<=R.min+1e-9&&R.v[1]>=R.max-1e-9); }
 function depHours(t){ const h=parseT(t.dep); return h==null?null:h; }
@@ -1247,21 +1159,21 @@ function syncRanges(){
             ].join("|");
   if(key===rangeScope) return;
   rangeScope=key;
-  /* 票价档位 = 本次范围（当前通道 / 当前程 + 所勾席别）里出现过的每一个票价 */
-  const ps=new Set();
-  routeTrains().forEach(t=>priceList(t).forEach(p=>ps.add(Math.round(p*100)/100)));
-  const lv=Array.from(ps).sort((a,b)=>a-b);
+  let lo=Infinity, hi=-Infinity;
+  routeTrains().forEach(t=>priceList(t).forEach(p=>{
+    if(p<lo) lo=p; if(p>hi) hi=p;
+  }));
   const R=RANGES.price;
-  R.lvls=lv.length?lv:null;
-  if(!lv.length){ R.min=0; R.max=1000; }
-  else{ R.min=lv[0]; R.max=lv[lv.length-1]; }   // 上下限 = 真实的最低价 / 最高价
-  /* 已选区间按新边界夹一下，再吸附到最近的档位（只会放宽，结果集不变）；
-     完全落在界外时等价于「不限」，避免出现空结果还看不出原因 */
+  if(!isFinite(lo)){ R.min=0; R.max=1000; }
+  else{
+    R.min=Math.max(0,Math.floor(lo/10)*10);
+    R.max=Math.max(R.min+10,Math.ceil(hi/10)*10);
+  }
+  /* 已选区间按新边界夹一下；完全落在界外就直接失效，避免出现「空结果且看不出原因」 */
   if(R.v){
     R.v=[Math.max(R.min,Math.min(R.max,R.v[0])),
          Math.max(R.min,Math.min(R.max,R.v[1]))];
-    if(R.v[0]>R.v[1]) R.v=[R.v[1],R.v[1]];
-    if(R.lvls) R.v=[snapDown(R.lvls,R.v[0]),snapUp(R.lvls,R.v[1])];
+    if(R.v[1]-R.v[0]<R.step) R.v=null;
   }
   renderRanges();
 }
@@ -1276,26 +1188,15 @@ function renderRanges(){
     box.querySelector(".rfill").style.width=((b-a)*100)+"%";
     box.querySelector(".rgrip.l").style.left=(a*100)+"%";
     box.querySelector(".rgrip.r").style.left=(b*100)+"%";
-    const val=document.getElementById(k+"Val");
-    val.innerHTML=rFull(R)
+    document.getElementById(k+"Val").innerHTML=rFull(R)
       ? `<span class="muted">不限</span>`
       : `<b>${R.fmt(v[0])}</b> – <b>${R.fmt(v[1])}</b>`;
-    val.title=R.lvls?`可选价位 ${R.lvls.length} 个：${R.fmt(R.min)} – ${R.fmt(R.max)}`:"";
-    /* 票价：把每个真实档位画成轨道上的细刻度，让「离散」看得见。
-       档位太密（>120）时刻度会糊成一片，就不画了 */
-    const lev=document.getElementById(k+"Lev");
-    if(lev) lev.innerHTML=(R.lvls&&R.lvls.length>1&&R.lvls.length<=120)
-      ? R.lvls.map(p=>`<i style="left:${((p-R.min)/span*100).toFixed(3)}%"></i>`).join("")
-      : "";
   });
 }
 function setRangeEnd(R,mode,val){
   const cur=R.v?R.v.slice():[R.min,R.max];
-  /* 票价档位是离散的：允许两端收到同一档（= 只看这一个价位）。
-     发车时间是连续量，仍然要求两端至少差一个步长。 */
-  const gap=R.lvls?0:R.step;
-  if(mode==="l") cur[0]=Math.max(R.min,Math.min(val,cur[1]-gap));
-  else           cur[1]=Math.min(R.max,Math.max(val,cur[0]+gap));
+  if(mode==="l") cur[0]=Math.max(R.min,Math.min(val,cur[1]-R.step));
+  else           cur[1]=Math.min(R.max,Math.max(val,cur[0]+R.step));
   R.v=cur;
   renderRanges();
   apply();
@@ -1304,11 +1205,6 @@ function setRangeEnd(R,mode,val){
   const valFromX=(R,track,clientX)=>{
     const r=track.getBoundingClientRect();
     const f=Math.max(0,Math.min(1,(clientX-r.left)/r.width));
-    /* 离散档位（票价）：按索引吸附到最近的那个真实票价 */
-    if(R.lvls&&R.lvls.length){
-      if(R.lvls.length===1) return R.lvls[0];
-      return R.lvls[Math.round(f*(R.lvls.length-1))];
-    }
     return R.min+Math.round(f*(R.max-R.min)/R.step)*R.step;
   };
   ["dep","price"].forEach(k=>{
@@ -1759,7 +1655,6 @@ function renderRouteLine(){
      路由条是这两个栏位唯一的联动点，放在这里一起刷新，避免各处漏调。 */
   renderTypes();
   renderSeats();
-  renderEnds();
   renderLegend();
   routeLineBody();
 }
@@ -1848,28 +1743,6 @@ document.getElementById("typegrp").addEventListener("click",e=>{
     else cur.add(b.dataset.ty);
   }else return;
   renderTypes();
-  apply();
-});
-/* 始发站 / 终到站：点单个站 = 切换；点「全部」= 全选 / 全不选。
-   null 表示「不限」，所以全选后又归一成 null，免得按钮态与筛选态对不上。 */
-document.getElementById("endgrp").addEventListener("click",e=>{
-  const b=e.target.closest("button");
-  if(!b) return;
-  const side=b.dataset.end||b.dataset.endall;
-  if(!side) return;
-  const st=endStations();
-  const arr=side==="from"?st.from:st.to;
-  let sel=side==="from"?fromSel:toSel;
-  if(b.dataset.endall!==undefined){
-    sel=(sel===null||sel.size>=arr.length)?new Set():null;   // 已全选 → 清空；否则 → 全选
-  }else{
-    if(sel===null) sel=new Set(arr);                         // 从「不限」转成显式集合
-    const v=b.dataset.endv;
-    if(sel.has(v)) sel.delete(v); else sel.add(v);
-    if(sel.size>=arr.length) sel=null;                       // 又凑齐全选 → 回到不限
-  }
-  setEndSel(side,sel);
-  renderEnds();
   apply();
 });
 /* 排序不再单独占一行：由表头「起价」按钮驱动（见 renderSortBtn） */
@@ -2263,8 +2136,7 @@ function renderNote(){
     · <b>通道划分</b>：把每趟车的<b>中间城市集合</b>两两算相似度（Jaccard ≥ 0.45）后聚类，自动分出若干条走廊 —— 郑州→常州 会分出京沪 / 合杭 / 连镇三条，上海→杭州 分出嘉兴 / 湖州两条，<b>不依赖任何写死的线路名</b>，换任何区间都成立。通道名默认取该通道<b>最具辨识度的中间站</b>（如「嘉兴通道」），改 <code>data/channel_aliases.json</code> 里的 <code>names</code> 即可换成你习惯的叫法（郑州→常州 已预置为京沪 / 合杭 / 连镇）。通道说明（「经 …」）也由数据生成。<br>
     · <b>自定义始发 / 终到站</b>：顶部填入「出发 / 到达」后点<b>换线路</b>，即按新区间重新抓取（新线路第一次约 <b>10–40 秒</b>，已有缓存的区间几秒）。站名支持输入任意<b>城市或车站</b>（郑州东会按郑州处理），输入框有 3388 个站名的下拉补全，打错的站会当场标红、不会白跑一趟。查票一律<b>按城市</b>发请求，所以郑州 / 郑州东 / 郑州航空港的车次都会返回。同一区间的数据各自缓存，切回去不必重抓。<br>
     · <b>经停抓取并发（高级设置）</b>：刷新栏下的「<b>高级设置</b>」里可选<b>串行 / 3 并行 / 6 并行</b>（默认 6，记在浏览器本地）。整车次的经停是一趟一个请求（直连 12306，不走 MCP，省掉了「车次号→内部编号」那次多余请求），所以并发就是速度：6 路并发实测 <b>393 趟首次抓取约 20 秒</b>，串行则要 20 分钟量级。被限流时会立刻停下并保留已有进度，下次刷新接着补。<br>
-    · <b>发车时间 / 票价筛选</b>：侧栏两组双滑块 —— 拖两端把手缩放、点轨道空白把最近的一端挪过来、「重置」清除。发车时间按该趟车的发车时刻算；票价的<b>档位就是本次查询里真实出现过的每一个票价</b>（如 ¥337 / ¥569，而不是 5 元一档），上下限即真实的最低价 / 最高价，轨道上的细刻度标出每个档位的位置（鼠标悬停数值处可看共有几个价位）；两端可以收到<b>同一档</b>，等于只看这一个价位的车。票价只要<b>所选席别中有任意一个</b>落在区间内就算通过（用最低价判断会把「硬座便宜但已售罄」的车错杀）。档位与上下限随所选席别 / 通道自动重算。<br>
-    · <b>始发站 / 终到站筛选</b>：侧栏席别下面两行按钮，只列<b>本次查询里真实出现过的实测起终站</b>（如 常州 159 趟 / 常州北 78 趟 / 金坛 12 趟），<b>可多选</b>，点「全部」一键全选或全不选，按钮上的小数字是该站趟数（悬停可看「该站趟数 / 总趟数」）。筛选结果同时作用于运行图、明细表与趟数统计。直达模式筛的就是每趟车本次区间的实测起终站；<b>中转模式只筛线路两端</b> —— 始发站取第 1 程的出发站、终到站取第 2 程的到达站（第 1 程的「终到」是几十个中转站，筛它没有意义）。换线路 / 进出中转后会自动回到「不限」。<br>
+    · <b>发车时间 / 票价筛选</b>：侧栏两组双滑块 —— 拖两端把手缩放、点轨道空白把最近的一端挪过来、「重置」清除。发车时间按该趟车的发车时刻算；票价只要<b>所选席别中有任意一个</b>落在区间内就算通过（用最低价判断会把「硬座便宜但已售罄」的车错杀）。票价上下限随所选席别自动重算。<br>
     · <b>同城多站</b>：郑州 / 郑州东 / 郑州航空港 这类同一城市的不同车站，在纵轴上占<b>同一行</b>、按时刻<b>左右分开</b>画出各自的停靠点 —— 所以一趟车在同一城市停两次会看到两个点（如 G1950 的「郑州 17:48」与「郑州东 18:10」）。鼠标悬停站名可看该行包含哪些车站。<br>
     · <b>中转查询</b>：点左侧<b>站名</b>会选中该站（站名变橙色），再点「<b>刷新数据</b>」并确认后，即<b>实时抓取</b>「郑州→该站」与「该站→常州」两程的全部车次，就地画在图上且原有线路隐藏；再点同一站名，或点路由条右侧的「退出中转」，即可恢复（也可用<b>车型栏的第1程 / 第2程</b>分别筛选两程车型）。数据时间与退出按钮显示在<b>路由条右侧</b>。车次明细表会按<b>第 1 程 / 第 2 程分成两段</b>，各带一条小标题（含该程共多少趟、当前显示多少趟），排序在每段内各自进行。<br>
     · <b>中转站有多个车站时</b>（如徐州 / 徐州东、常州 / 常州北 / 金坛）：同一趟车可能「到这个站、却要从另一个站出发」，所以中转行会按<b>实际车站</b>用<b>不同的点</b>区分，共 <b>6 种</b> —— ● 实心圆 · ○ 空心圆 · ■ 实心方块 · □ 空心方块 · ▲ 实心三角 · △ 空心三角，行内右上角有对应图例；超过 6 个站时图例会点明总站数。选中该车时，各站时刻也会带上站名（如「徐州东 05:47」）。该行只涉及一个车站时，全部用默认的实心圆。<br>
