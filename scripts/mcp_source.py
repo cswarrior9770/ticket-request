@@ -61,7 +61,17 @@ def _throttle(last, interval):
 
 def load_price(client, from_station, to_station, date, log=print, save=True,
                save_path=None):
-    log("MCP query-ticket-price …")
+    """⚠️ 已停用：这条路取到的是**公布票价**，不是实付的执行票价。
+
+    MCP 的 `query-ticket-price` 打的是 `leftTicketPrice/queryAllPublicPrice`
+    （接口名里就是 PublicPrice），不打折；而 12306 实际售卖的是
+    `leftTicketPrice/query` 的**执行票价**（浮动折扣后）。两者在高铁动车上
+    普遍差 5~40%（实测 G1808 二等座 公布 ¥502 / 执行 ¥398）。
+
+    所以票价一律走 `pipeline.fetch_price()` 直连。本函数保留仅供对照/测试，
+    **不要再接到正式取数路径上**（pipeline 已不再调用它）。
+    """
+    log("MCP query-ticket-price …（注意：这是公布票价，正式路径不使用）")
     r = client.call_json("query-ticket-price", {
         "from_station": from_station, "to_station": to_station,
         "train_date": date}, timeout=90)

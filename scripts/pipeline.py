@@ -4,9 +4,15 @@
 职责：抓票价/席别 → 抓经停站（增量）→ 抓余票快照 → 构建前端数据集 → 注入 HTML
 
 接口说明（实测结论）：
-  leftTicketPrice/query   票价 + 席别编组   字段名干净，未受限流影响
+  leftTicketPrice/query   票价 + 席别编组   **执行票价（折扣后实付价）**，字段名干净，未受限流影响
   czxx/queryByTrainNo     车次经停站        未受限流影响
   leftTicket/query        实时余票          字段为 | 分隔数组，高频会被长时间限流
+
+⚠️ 票价**绝不能用** `leftTicketPrice/queryAllPublicPrice`（MCP 的 query-ticket-price 打的就是它）：
+   那是**公布票价**，不打折。实测同一天同一趟车（郑州东→常州北 G1808 二等座）：
+       公布票价 ¥502.0  vs  执行票价 ¥398.0（7.9 折）
+   高铁/动车普遍有浮动折扣（实测 6 折 ~ 原价），普速的软卧/硬卧也常打折，
+   只有少数（如普速硬座）两者相同。用公布价会让人以为要多付钱。
 """
 import json
 import os
@@ -266,6 +272,9 @@ def fetch_stations(interval=2.0, force=False):
 def fetch_price(date=DEFAULT_DATE, interval=3.0,
                 from_code=None, to_code=None, save=True):
     """票价 + 席别编组（该接口未受限流影响）
+
+    返回的是**执行票价**（实际支付价，已含浮动折扣），不是公布票价 ——
+    见文件头关于 `queryAllPublicPrice` 的说明。
 
     from_code/to_code 可指定任意区间（中转查询用）；save=False 时不覆盖主缓存。
     """
@@ -1236,6 +1245,8 @@ def query_transfer(date=DEFAULT_DATE, via="徐州", source=None, interval=2.5,
     """查询经 `via` 中转的两段车次：郑州→via、via→常州。
 
     只取「票价 + 余票」两样，**不抓经停**，所以很快（两段共 4 次请求量级）。
+    ⚠️ 票价一律走直连 `leftTicketPrice/query`（**执行票价**）：MCP 的票价是公布票价
+    （见文件头），中转两程同样不能用。
     返回 {"date","via","source_used","legs":[{"from","to","trains":[...]} ...]}
     """
     src = (source or os.environ.get(SOURCE_ENV) or "auto").strip().lower()
@@ -1247,11 +1258,17 @@ def query_transfer(date=DEFAULT_DATE, via="徐州", source=None, interval=2.5,
         try:
             import mcp_client
             import mcp_source
+            code = fetch_stations(interval=interval)
             with mcp_client.open_client(log=lambda m: log("  " + m)) as cli:
                 res = []
                 for a, b in legs:
-                    log(f"{a} → {b}：票价")
-                    p = mcp_source.load_price(cli, a, b, date, log=log, save=False)
+                    ca, cb = code.get(a), code.get(b)
+                    if not ca or not cb:
+                        miss = [x for x in (a, b) if not code.get(x)]
+                        raise RuntimeError(f"站点字典里找不到：{miss}")
+                    log(f"{a} → {b}：票价（直连 · 执行票价）+ 余票（MCP）")
+                    p = fetch_price(date=date, interval=interval,
+                                    from_code=ca, to_code=cb, save=False)
                     lv = None
                     try:
                         lv = mcp_source.load_live(cli, a, b, date, log=log,
@@ -1301,20 +1318,26 @@ SOURCE_ENV = "TRAIN_SOURCE"          # mcp | urllib | auto（默认 auto）
 
 
 def _fetch_via_mcp(date, want_live, interval, log, conc=DEFAULT_CONC):
-    """用 mcp-server-12306 取票价 / 余票，经停站一律走直连（见 fetch_stop_batch）。
+    """MCP 只负责**余票**；票价与经停一律走直连。
 
     返回 (price, stops, live)。任一步失败都抛异常，由调用方决定是否回退。
+
+    ⚠️ 票价**不走 MCP**：MCP 的 query-ticket-price 打的是
+    `leftTicketPrice/queryAllPublicPrice`（**公布票价**，不打折），
+    而 12306 实际售卖的是 `leftTicketPrice/query` 的**执行票价**（折扣后实付价）。
+    两者在高铁动车上普遍差 5~40%（实测 G1808 二等座 公布 ¥502 / 执行 ¥398），
+    所以票价必须走 `fetch_price()` 直连。
     """
     import mcp_client
     import mcp_source
-    price_cache, live_cache = _cache_paths()
+    _, live_cache = _cache_paths()
+    log("① 票价与席别编组（直连 · 执行票价）")
+    price = fetch_price(date=date, interval=interval)
     with mcp_client.open_client(log=lambda m: log("  " + m)) as cli:
-        price = mcp_source.load_price(cli, FROM_NAME, TO_NAME, date, log=log,
-                                      save_path=price_cache)
         live = (mcp_source.load_live(cli, FROM_NAME, TO_NAME, date, log=log,
                                      save_path=live_cache)
                 if want_live else None)
-    # ⚠️ 经停**不走 MCP**：MCP 的 get-train-route-stations 每次要先发一次 leftTicket
+    # ⚠️ 经停也**不走 MCP**：MCP 的 get-train-route-stations 每次要先发一次 leftTicket
     # 把「车次号」解析成内部编号（请求数翻倍、单趟 1.2 秒），而票价载荷里本来就有
     # `train_no`，直连一趟一次请求、0.25 秒。见 fetch_stop_batch 的说明。
     stops = fetch_stops(date=date, interval=interval, price=price, log=log,
@@ -1327,9 +1350,11 @@ def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
     """完整刷新：取数 -> 构建 -> 注入
 
     取数有两套实现：
-      mcp    —— 走 mcp-server-12306（stdio 子进程），自带重试与会话保持
-      urllib —— 内置直连（原始实现），作为回退
+      mcp    —— 余票走 mcp-server-12306（stdio 子进程），票价与经停走直连
+      urllib —— 全部内置直连（原始实现），作为回退
     默认 auto：先试 mcp，失败则回退 urllib 并在报告里标明实际用的是哪套。
+
+    无论哪套，**票价都来自直连 `leftTicketPrice/query`（执行票价）**。
 
     from_name / to_name 可指定本次的始发 / 终到站（车站名或城市名）；
     不传则沿用进程内的当前路线，首次运行时为默认的 郑州 → 常州。
@@ -1362,7 +1387,7 @@ def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
     price = stops = live = None
     mcp_ok = False
     if src in ("mcp", "auto"):
-        log(f"数据源：MCP（mcp-server-12306）＋ 直连经停")
+        log("数据源：MCP（mcp-server-12306）取余票 ＋ 直连票价（执行票价）/ 经停")
         try:
             price, stops, live = _fetch_via_mcp(date, want_live, interval, log, conc)
             mcp_ok = True
