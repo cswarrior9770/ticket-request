@@ -1320,29 +1320,76 @@ SOURCE_ENV = "TRAIN_SOURCE"          # mcp | urllib | auto（默认 auto）
 def _fetch_via_mcp(date, want_live, interval, log, conc=DEFAULT_CONC):
     """MCP 只负责**余票**；票价与经停一律走直连。
 
-    返回 (price, stops, live)。任一步失败都抛异常，由调用方决定是否回退。
+    返回 (price, stops, live)。
 
     ⚠️ 票价**不走 MCP**：MCP 的 query-ticket-price 打的是
     `leftTicketPrice/queryAllPublicPrice`（**公布票价**，不打折），
     而 12306 实际售卖的是 `leftTicketPrice/query` 的**执行票价**（折扣后实付价）。
     两者在高铁动车上普遍差 5~40%（实测 G1808 二等座 公布 ¥502 / 执行 ¥398），
     所以票价必须走 `fetch_price()` 直连。
+
+    每一步都打印「序号 + 耗时」：uvx 冷启动要联网解析包（实测 10 秒起，
+    网络差时更久），这段时间**没有任何输出**，不打点会让人以为卡死在票价那一步。
+    MCP 起不来也不拖垮整次刷新 —— 直接改用直连余票。
     """
     import mcp_client
     import mcp_source
     _, live_cache = _cache_paths()
+
     log("① 票价与席别编组（直连 · 执行票价）")
+    t0 = time.time()
     price = fetch_price(date=date, interval=interval)
-    with mcp_client.open_client(log=lambda m: log("  " + m)) as cli:
-        live = (mcp_source.load_live(cli, FROM_NAME, TO_NAME, date, log=log,
-                                     save_path=live_cache)
-                if want_live else None)
+    log(f"   ✓ {len(price.get('data') or [])} 条（{time.time() - t0:.1f} 秒）")
+
+    live = None
+    live_src = "none"                 # none / mcp / urllib-fallback / cache
+    if want_live:
+        log("② 实时余票（走 mcp-server-12306；uvx 启动要联网解析包，"
+            "首次约 10~60 秒，起不来会自动改用直连余票）")
+        t0 = time.time()
+        stop = threading.Event()
+
+        def _tick():
+            while not stop.wait(15):
+                log(f"   …仍在等 MCP 就绪（已 {time.time() - t0:.0f} 秒）；"
+                    f"久等无果会自动改用直连余票")
+
+        threading.Thread(target=_tick, daemon=True).start()
+        try:
+            with mcp_client.open_client(log=lambda m: log("  " + m)) as cli:
+                live = mcp_source.load_live(cli, FROM_NAME, TO_NAME, date,
+                                            log=log, save_path=live_cache)
+            live_src = "mcp"
+            log(f"   ✓ 余票 {len(live.get('trains') or {})} 趟"
+                f"（{time.time() - t0:.1f} 秒）")
+        except Exception as e:
+            log(f"   × MCP 不可用（{type(e).__name__}: {str(e)[:120]}）")
+            log("   → 改用直连 leftTicket/query 取余票（该接口容易被限流）")
+            t0 = time.time()
+            try:
+                live = fetch_live(date=date, interval=interval)
+                live["source"] = "urllib-fallback"
+                live_src = "urllib-fallback"
+                log(f"   ✓ 余票 {len(live.get('trains') or {})} 趟"
+                    f"（{time.time() - t0:.1f} 秒）")
+            except Exception as e2:
+                # 两条路都断了：别让整次刷新白跑 —— build() 在 live=None 时
+                # 会自己去读上次的余票快照，页面也会标注快照时间
+                live, live_src = None, "cache"
+                log(f"   × 直连余票也不可用（{type(e2).__name__}: {str(e2)[:100]}）")
+                log("   → 沿用上次余票快照（余票不是最新，其余数据照常刷新）")
+        finally:
+            stop.set()
+
+    log("③ 经停站（增量 · 直连）")
+    t0 = time.time()
     # ⚠️ 经停也**不走 MCP**：MCP 的 get-train-route-stations 每次要先发一次 leftTicket
     # 把「车次号」解析成内部编号（请求数翻倍、单趟 1.2 秒），而票价载荷里本来就有
     # `train_no`，直连一趟一次请求、0.25 秒。见 fetch_stop_batch 的说明。
     stops = fetch_stops(date=date, interval=interval, price=price, log=log,
                         conc=conc)
-    return price, stops, live
+    log(f"   ✓ {len(stops)} 趟已有经停（{time.time() - t0:.1f} 秒）")
+    return price, stops, live, live_src
 
 
 def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
@@ -1389,10 +1436,23 @@ def refresh(date=DEFAULT_DATE, want_live=True, interval=3.5, log=print,
     if src in ("mcp", "auto"):
         log("数据源：MCP（mcp-server-12306）取余票 ＋ 直连票价（执行票价）/ 经停")
         try:
-            price, stops, live = _fetch_via_mcp(date, want_live, interval, log, conc)
+            price, stops, live, live_src = _fetch_via_mcp(date, want_live, interval,
+                                                          log, conc)
             mcp_ok = True
             report["source_used"] = "mcp"
             report["steps"].append({"name": "MCP 取数", "ok": True})
+            if live_src == "urllib-fallback":
+                # 余票其实没走成 MCP（起不来/超时），如实标注数据源。
+                # 用 ok=True + note：这是一次**成功**的降级，不该让前端报「部分步骤未成功」
+                report["source_used"] = "urllib"
+                report["steps"].append({
+                    "name": "余票来源", "ok": True,
+                    "note": "MCP 不可用，余票已回退直连（票价/经停本来就是直连）"})
+            elif live_src == "cache":
+                report["source_used"] = "urllib"
+                report["steps"].append({
+                    "name": "余票来源", "ok": True,
+                    "note": "MCP 与直连都不可用，余票沿用上次快照"})
         except Exception as e:
             msg = f"{type(e).__name__}: {str(e)[:200]}"
             log(f"MCP 取数失败：{msg}")

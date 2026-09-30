@@ -34,8 +34,15 @@ import threading
 import time
 
 DEFAULT_CMD = ["uvx", "mcp-server-12306"]
+# 想避开 uvx 每次冷启动（要联网解析包，实测 10 秒起步、网络差时更久）时，
+# 可以自己 `uv tool install mcp-server-12306` 后用环境变量指过去，例如：
+#     set TRAIN_MCP_CMD=mcp-server-12306
+DEFAULT_CMD = (os.environ.get("TRAIN_MCP_CMD") or " ".join(DEFAULT_CMD)).split()
 # 服务端会做协议协商，按新→旧依次尝试
 PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"]
+# 协议协商的重试超时：第一次给足（要等 uvx 冷启动/下载），之后只等很短 ——
+# 首轮都超时了说明多半是卡住或没装，再各等 timeout 秒只会让人以为程序死了
+RETRY_TIMEOUT = 15
 
 
 class MCPError(RuntimeError):
@@ -169,13 +176,15 @@ class MCPClient:
 
     def _handshake(self):
         err = None
-        for pv in PROTOCOLS:
+        for k, pv in enumerate(PROTOCOLS):
+            # 第一轮给足 timeout（uvx 冷启动要联网解析/下载包，慢的时候十几秒起），
+            # 后面几轮只等 RETRY_TIMEOUT：首轮超时基本就说明起不来了
             try:
                 r = self.request("initialize", {
                     "protocolVersion": pv,
                     "capabilities": {},
                     "clientInfo": {"name": "wb-train-chart", "version": "1.0"},
-                })
+                }, timeout=(self.timeout if k == 0 else RETRY_TIMEOUT))
             except MCPError as e:
                 err = e
                 continue
